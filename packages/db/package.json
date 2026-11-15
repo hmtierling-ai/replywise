@@ -1,0 +1,30 @@
+{
+  "name": "@replywise/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:int": "vitest run -c vitest.int.config.ts",
+    "generate": "drizzle-kit generate",
+    "migrate": "dotenv -e ../../.env -- tsx src/bin/migrate.ts"
+  },
+  "dependencies": {
+    "@replywise/core": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "postgres": "^4.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "dotenv-cli": "^11.1.0",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
