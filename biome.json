@@ -9,5 +9,6 @@
   "javascript": {
     "formatter": { "quoteStyle": "double", "semicolons": "always", "trailingCommas": "all" }
   },
+  "css": { "parser": { "tailwindDirectives": true } },
   "assist": { "actions": { "source": { "organizeImports": "on" } } }
 }
