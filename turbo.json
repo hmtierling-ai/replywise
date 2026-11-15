@@ -1,0 +1,25 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": [
+    "NODE_ENV",
+    "CI",
+    "APP_URL",
+    "DATABASE_URL",
+    "DATABASE_URL_TEST",
+    "REDIS_URL",
+    "REDIS_URL_TEST",
+    "LOCAL_KEKS",
+    "BETTER_AUTH_SECRET",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "LOG_LEVEL"
+  ],
+  "tasks": {
+    "build": { "dependsOn": ["^build"], "outputs": [".next/**", "!.next/cache/**", "dist/**"] },
+    "dev": { "cache": false, "persistent": true },
+    "typecheck": {},
+    "test": {},
+    "test:int": { "cache": false },
+    "e2e": { "cache": false }
+  }
+}
