@@ -19,6 +19,11 @@ export default defineConfig({
     command: process.env.CI ? "pnpm start" : "pnpm build && pnpm start",
     url: "http://localhost:3000/sign-in",
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    timeout: 180_000,
+    env: {
+      ...(process.env as Record<string, string>),
+      GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID || "e2e-gmail-client-id",
+      GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET || "e2e-gmail-client-secret",
+    },
   },
 });
