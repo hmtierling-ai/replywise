@@ -9,3 +9,7 @@ export function createDb(url: string, options: { max?: number } = {}) {
 }
 
 export type Db = ReturnType<typeof createDb>["db"];
+
+export type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+/** Query functions accept either the pool or an open transaction. */
+export type DbExecutor = Db | DbTransaction;
