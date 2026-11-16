@@ -83,6 +83,9 @@ export function tokenGrantFrom(
       : previous?.refreshToken;
   if (!refreshToken) throw new OAuthError("missing_refresh_token", 200);
   const expiresIn = Number(body.expires_in ?? 3600);
+  if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
+    throw new OAuthError("invalid_token_response", 200);
+  }
   return {
     tokens: {
       accessToken,

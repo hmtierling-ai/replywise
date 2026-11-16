@@ -122,9 +122,29 @@ describe("Gmail OAuth provider", () => {
       { accessToken: "old", refreshToken: "1//secret-refresh", expiresAt: NOW.toISOString() },
       NOW,
     );
-    await expect(failure).rejects.toBeInstanceOf(OAuthError);
-    await expect(failure).rejects.toMatchObject({ code: "invalid_grant", status: 400 });
-    await expect(failure).rejects.not.toThrow(/secret-refresh/);
+    const error = await failure.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OAuthError);
+    expect(error).toMatchObject({ code: "invalid_grant", status: 400 });
+    const message = String((error as Error).message);
+    expect(message).not.toContain("1//secret-refresh");
+    expect(message).not.toContain("secret-456");
+  });
+
+  it.each([
+    ["a non-numeric expires_in", "abc"],
+    ["a zero expires_in", 0],
+  ])("rejects a token response with %s as invalid_token_response", async (_label, expiresIn) => {
+    const { fetchImpl } = fakeFetch([
+      { body: { access_token: "ya29.access", refresh_token: "1//refresh", expires_in: expiresIn } },
+    ]);
+    const gmail = createGmailOAuth({ ...config, fetch: fetchImpl });
+    const failure = gmail.exchangeCode(
+      { code: "auth-code", codeVerifier: "verifier", redirectUri: "http://cb" },
+      NOW,
+    );
+    const error = await failure.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OAuthError);
+    expect(error).toMatchObject({ code: "invalid_token_response" });
   });
 
   it("revokes with the refresh token and reads the profile email", async () => {
