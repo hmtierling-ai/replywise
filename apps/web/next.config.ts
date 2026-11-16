@@ -12,6 +12,8 @@ const nextConfig: NextConfig = {
     "@replywise/config",
     "@replywise/crypto",
     "@replywise/db",
+    "@replywise/mail",
+    "@replywise/mailbox",
     "@replywise/observability",
   ],
   poweredByHeader: false,
