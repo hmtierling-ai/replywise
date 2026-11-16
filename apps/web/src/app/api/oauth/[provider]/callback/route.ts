@@ -2,17 +2,17 @@ import { isMailProviderId } from "@replywise/core";
 import { ConnectError, completeConnect, MAILBOXES_PATH } from "@replywise/mailbox";
 import { type NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { getMailboxDeps, oauthCallbackUrl, requestContext } from "@/lib/mailbox";
+import { appUrl, getMailboxDeps, oauthCallbackUrl, requestContext } from "@/lib/mailbox";
 
 export async function GET(
   request: NextRequest,
   ctx: RouteContext<"/api/oauth/[provider]/callback">,
 ) {
   const back = (params: Record<string, string>) =>
-    NextResponse.redirect(new URL(`${MAILBOXES_PATH}?${new URLSearchParams(params)}`, request.url));
+    NextResponse.redirect(appUrl(`${MAILBOXES_PATH}?${new URLSearchParams(params)}`));
 
   const session = await getSession();
-  if (!session) return NextResponse.redirect(new URL("/sign-in", request.url));
+  if (!session) return NextResponse.redirect(appUrl("/sign-in"));
 
   const { provider } = await ctx.params;
   if (!isMailProviderId(provider)) return back({ error: "not_configured" });

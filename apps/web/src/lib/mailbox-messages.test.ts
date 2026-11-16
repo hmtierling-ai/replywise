@@ -40,6 +40,15 @@ describe("flashFromSearchParams", () => {
     expect(unknown?.message).not.toContain("<script>");
   });
 
+  it("falls back to the generic message for Object.prototype keys", () => {
+    for (const key of ["__proto__", "constructor", "toString"]) {
+      const flash = flashFromSearchParams({ error: key });
+      expect(flash?.tone).toBe("error");
+      expect(typeof flash?.message).toBe("string");
+      expect(flash?.message).toBe("Something went wrong while connecting. Please try again.");
+    }
+  });
+
   it("uses the first value when a parameter repeats", () => {
     expect(flashFromSearchParams({ connected: ["outlook", "gmail"] })?.message).toMatch(/^Outlook/);
   });

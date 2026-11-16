@@ -30,6 +30,11 @@ export function oauthCallbackUrl(provider: MailProviderId): string {
   return new URL(`/api/oauth/${provider}/callback`, getEnv().APP_URL).toString();
 }
 
+/** Absolute URL on the configured app origin (not the proxy-internal request host). */
+export function appUrl(path: string): URL {
+  return new URL(path, getEnv().APP_URL);
+}
+
 export function requestContext(headers: Headers): RequestContext {
   return {
     ip: headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null,

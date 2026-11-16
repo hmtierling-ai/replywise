@@ -31,7 +31,9 @@ export function flashFromSearchParams(
   if (error) {
     return {
       tone: "error",
-      message: ERROR_MESSAGES[error] ?? "Something went wrong while connecting. Please try again.",
+      message: Object.hasOwn(ERROR_MESSAGES, error)
+        ? (ERROR_MESSAGES[error] as string)
+        : "Something went wrong while connecting. Please try again.",
     };
   }
   const connected = first(params.connected);
