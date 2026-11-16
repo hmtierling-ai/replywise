@@ -3,8 +3,10 @@ import { createDb } from "@replywise/db";
 import type { Logger } from "@replywise/observability";
 import { createJobQueue, createJobWorker, createRedisConnection } from "@replywise/queue";
 import { purgeBodiesHandler } from "./jobs/purge-bodies";
+import { purgeOAuthStatesHandler } from "./jobs/purge-oauth-states";
 
 export const PURGE_BODIES_SCHEDULER_ID = "maintenance.purgeBodies:hourly";
+export const PURGE_OAUTH_STATES_SCHEDULER_ID = "maintenance.purgeOAuthStates:hourly";
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 export async function startWorker(
@@ -21,7 +23,10 @@ export async function startWorker(
   const maintenanceWorker = createJobWorker(
     "maintenance",
     workerConnection,
-    { "maintenance.purgeBodies": purgeBodiesHandler({ db, logger }) },
+    {
+      "maintenance.purgeBodies": purgeBodiesHandler({ db, logger }),
+      "maintenance.purgeOAuthStates": purgeOAuthStatesHandler({ db, logger }),
+    },
     { concurrency: 1, ...prefix },
   );
   maintenanceWorker.on("failed", (job, error) => {
@@ -34,6 +39,12 @@ export async function startWorker(
   await queue.scheduleRepeating(
     PURGE_BODIES_SCHEDULER_ID,
     "maintenance.purgeBodies",
+    {},
+    ONE_HOUR_MS,
+  );
+  await queue.scheduleRepeating(
+    PURGE_OAUTH_STATES_SCHEDULER_ID,
+    "maintenance.purgeOAuthStates",
     {},
     ONE_HOUR_MS,
   );

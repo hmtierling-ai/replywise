@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { messages } from "@replywise/db";
+import { mailOAuthStates, messages } from "@replywise/db";
 import {
   insertMailAccount,
   insertMessage,
@@ -15,7 +15,8 @@ import { Queue } from "bullmq";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { purgeBodiesHandler } from "./jobs/purge-bodies";
-import { PURGE_BODIES_SCHEDULER_ID, startWorker } from "./main";
+import { purgeOAuthStatesHandler } from "./jobs/purge-oauth-states";
+import { PURGE_BODIES_SCHEDULER_ID, PURGE_OAUTH_STATES_SCHEDULER_ID, startWorker } from "./main";
 
 const REDIS_URL = process.env.REDIS_URL_TEST ?? "redis://localhost:6379";
 const silentLogger = () => {
@@ -55,6 +56,27 @@ describe("purgeBodiesHandler", () => {
   });
 });
 
+describe("purgeOAuthStatesHandler", () => {
+  it("removes expired OAuth states and logs only the count", async () => {
+    const { db } = handle;
+    const user = await insertUser(db);
+    await db.insert(mailOAuthStates).values({
+      stateHash: "expired",
+      userId: user.id,
+      provider: "gmail",
+      codeVerifierCiphertext: Buffer.from("v"),
+      returnTo: "/settings/mailboxes",
+      expiresAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    const { logger, lines } = silentLogger();
+
+    await purgeOAuthStatesHandler({ db, logger, now: () => new Date("2026-11-16T00:00:00Z") })();
+
+    expect(await db.select().from(mailOAuthStates)).toHaveLength(0);
+    expect(lines.join("")).toContain('"purged":1');
+  });
+});
+
 describe("startWorker", () => {
   it("registers the hourly purge scheduler and stops cleanly", async () => {
     const queuePrefix = `test-${randomUUID()}`;
@@ -75,7 +97,9 @@ describe("startWorker", () => {
     const inspector = new Queue("maintenance", { connection, prefix: queuePrefix });
     try {
       const schedulers = await inspector.getJobSchedulers();
-      expect(schedulers.map((s) => s.key)).toContain(PURGE_BODIES_SCHEDULER_ID);
+      const ids = schedulers.map((s) => s.key);
+      expect(ids).toContain(PURGE_BODIES_SCHEDULER_ID);
+      expect(ids).toContain(PURGE_OAUTH_STATES_SCHEDULER_ID);
     } finally {
       await inspector.close();
       await connection.quit();

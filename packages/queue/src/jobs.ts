@@ -5,6 +5,7 @@ export type QueueName = "sync" | "ai" | "maintenance";
 /** Single source of truth for job names, their queue, and payload shape. Payloads carry ids only. */
 export const jobDefinitions = {
   "maintenance.purgeBodies": { queue: "maintenance", payload: z.object({}).strict() },
+  "maintenance.purgeOAuthStates": { queue: "maintenance", payload: z.object({}).strict() },
 } as const satisfies Record<string, { queue: QueueName; payload: z.ZodType }>;
 
 export type JobName = keyof typeof jobDefinitions;
