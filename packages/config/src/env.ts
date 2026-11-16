@@ -8,6 +8,10 @@ export const baseEnvSchema = z.object({
   REDIS_URL: z.url(),
   LOCAL_KEKS: z.string().regex(KEK_LIST, "expected id:base64[,id:base64...]"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
+  GMAIL_CLIENT_ID: z.string().min(1).optional(),
+  GMAIL_CLIENT_SECRET: z.string().min(1).optional(),
+  OUTLOOK_CLIENT_ID: z.string().min(1).optional(),
+  OUTLOOK_CLIENT_SECRET: z.string().min(1).optional(),
 });
 
 export const workerEnvSchema = baseEnvSchema;

@@ -12,7 +12,11 @@
     "BETTER_AUTH_SECRET",
     "GOOGLE_CLIENT_ID",
     "GOOGLE_CLIENT_SECRET",
-    "LOG_LEVEL"
+    "LOG_LEVEL",
+    "GMAIL_CLIENT_ID",
+    "GMAIL_CLIENT_SECRET",
+    "OUTLOOK_CLIENT_ID",
+    "OUTLOOK_CLIENT_SECRET"
   ],
   "tasks": {
     "build": { "dependsOn": ["^build"], "outputs": [".next/**", "!.next/cache/**", "dist/**"] },

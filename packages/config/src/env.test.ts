@@ -54,4 +54,16 @@ describe("parseEnv", () => {
       EnvValidationError,
     );
   });
+
+  it("accepts optional mailbox OAuth credentials", () => {
+    const env = parseEnv(workerEnvSchema, {
+      ...base,
+      GMAIL_CLIENT_ID: "gmail-id",
+      GMAIL_CLIENT_SECRET: "gmail-secret",
+      OUTLOOK_CLIENT_ID: "",
+    });
+    expect(env.GMAIL_CLIENT_ID).toBe("gmail-id");
+    expect(env.GMAIL_CLIENT_SECRET).toBe("gmail-secret");
+    expect(env.OUTLOOK_CLIENT_ID).toBeUndefined();
+  });
 });
