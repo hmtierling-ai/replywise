@@ -8,14 +8,14 @@ describe("routeDecision", () => {
     }
   });
 
-  it("sends signed-in visitors away from the auth pages", () => {
-    expect(routeDecision("/sign-in", true)).toEqual({ type: "redirect", to: "/inbox" });
-    expect(routeDecision("/sign-up", true)).toEqual({ type: "redirect", to: "/inbox" });
-  });
-
-  it("lets visitors without a session reach the auth pages", () => {
-    expect(routeDecision("/sign-in", false)).toEqual({ type: "next" });
-    expect(routeDecision("/sign-up", false)).toEqual({ type: "next" });
+  it("always lets visitors reach the auth pages, even with a (possibly stale) cookie", () => {
+    // A cookie only proves a session *might* exist. Redirecting away from sign-in on
+    // cookie presence loops forever when the session is expired or revoked; the
+    // auth pages verify the real session server-side instead.
+    for (const hasCookie of [true, false]) {
+      expect(routeDecision("/sign-in", hasCookie)).toEqual({ type: "next" });
+      expect(routeDecision("/sign-up", hasCookie)).toEqual({ type: "next" });
+    }
   });
 
   it("lets signed-in visitors through to known views", () => {

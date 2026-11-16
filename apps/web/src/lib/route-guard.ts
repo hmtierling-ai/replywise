@@ -13,9 +13,9 @@ const CATEGORY_PATH = /^\/inbox\/([^/]+)\/?$/;
  * It is not an authorization check: data access must still verify the session (DAL).
  */
 export function routeDecision(pathname: string, hasSessionCookie: boolean): RouteDecision {
-  if (AUTH_PAGES.has(pathname)) {
-    return hasSessionCookie ? { type: "redirect", to: "/inbox" } : { type: "next" };
-  }
+  // Never redirect away from auth pages on cookie presence alone: a stale cookie would loop
+  // /inbox -> /sign-in -> /inbox. The pages check the real session (RedirectIfSignedIn).
+  if (AUTH_PAGES.has(pathname)) return { type: "next" };
   if (!hasSessionCookie) return { type: "redirect", to: "/sign-in" };
 
   const category = CATEGORY_PATH.exec(pathname)?.[1];

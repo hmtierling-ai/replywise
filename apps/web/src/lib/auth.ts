@@ -45,14 +45,19 @@ export function getAuth(): Auth {
   return instance;
 }
 
+/** Real (non-optimistic) session lookup; null when the cookie is missing, expired or invalid. */
+export async function getSession() {
+  // Read request data first: prerendering stops here, so env/DB are never touched at build time.
+  const requestHeaders = await headers();
+  return getAuth().api.getSession({ headers: requestHeaders });
+}
+
 /**
  * Data-access-layer check. Call from any server component, action or handler that reads
  * user data. Under cacheComponents, render callers inside <Suspense>.
  */
 export async function requireUser() {
-  // Read request data first: prerendering stops here, so env/DB are never touched at build time.
-  const requestHeaders = await headers();
-  const session = await getAuth().api.getSession({ headers: requestHeaders });
+  const session = await getSession();
   if (!session) redirect("/sign-in");
   return session.user;
 }

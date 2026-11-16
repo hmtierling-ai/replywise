@@ -1,8 +1,16 @@
+import { Suspense } from "react";
+import { RedirectIfSignedIn } from "@/components/auth/redirect-if-signed-in";
 import { SignUpForm } from "@/components/auth/sign-up-form";
 
 export const metadata = { title: "Create account" };
 
-// Signed-in visitors are redirected to /inbox by proxy.ts before this renders.
 export default function SignUpPage() {
-  return <SignUpForm />;
+  return (
+    <>
+      <Suspense fallback={null}>
+        <RedirectIfSignedIn />
+      </Suspense>
+      <SignUpForm />
+    </>
+  );
 }
