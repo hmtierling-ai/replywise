@@ -20,6 +20,16 @@ describe("flashFromSearchParams", () => {
     const flash = flashFromSearchParams({ disconnected: "outlook", manual: "1" });
     expect(flash?.tone).toBe("info");
     expect(flash?.message).toContain("account.microsoft.com");
+    expect(flash?.message).not.toContain("google");
+  });
+
+  it("tells Gmail users where to remove access when revocation failed", () => {
+    const flash = flashFromSearchParams({ disconnected: "gmail", manual: "1" });
+    expect(flash?.tone).toBe("info");
+    expect(flash?.message).toBe(
+      "Gmail disconnected and its data deleted. To also remove Replywise's access, visit myaccount.google.com/permissions.",
+    );
+    expect(flash?.message).not.toContain("microsoft");
   });
 
   it("explains every connect failure without echoing raw input", () => {

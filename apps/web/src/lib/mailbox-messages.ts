@@ -5,6 +5,12 @@ export const PROVIDER_LABEL: Record<MailProviderId, string> = {
   outlook: "Outlook",
 };
 
+const MANUAL_REVOKE_HINT: Record<MailProviderId, string> = {
+  gmail: "To also remove Replywise's access, visit myaccount.google.com/permissions.",
+  outlook:
+    "To also remove Replywise's access, visit account.microsoft.com → Privacy → Apps and services.",
+};
+
 export type Flash = { tone: "success" | "error" | "info"; message: string };
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -48,7 +54,7 @@ export function flashFromSearchParams(
     if (first(params.manual) === "1") {
       return {
         tone: "info",
-        message: `${PROVIDER_LABEL[disconnected]} disconnected and its data deleted. To also remove Replywise's access, visit account.microsoft.com → Privacy → Apps and services.`,
+        message: `${PROVIDER_LABEL[disconnected]} disconnected and its data deleted. ${MANUAL_REVOKE_HINT[disconnected]}`,
       };
     }
     return {

@@ -1,16 +1,5 @@
-import { expect, type Page, test } from "@playwright/test";
-
-const uniqueEmail = () => `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
-const PASSWORD = "correct-horse-battery";
-
-async function signUp(page: Page, email: string) {
-  await page.goto("/sign-up");
-  await page.getByLabel("Name").fill("Ada Lovelace");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page).toHaveURL(/\/inbox$/);
-}
+import { expect, test } from "@playwright/test";
+import { PASSWORD, signUp, uniqueEmail } from "./helpers";
 
 test("unauthenticated visitors are redirected to sign-in", async ({ page }) => {
   await page.goto("/inbox/urgent");
@@ -19,7 +8,7 @@ test("unauthenticated visitors are redirected to sign-in", async ({ page }) => {
 
 test("a new user signs up, sees the app shell, signs out and signs back in", async ({ page }) => {
   const email = uniqueEmail();
-  await signUp(page, email);
+  await signUp(page, { email });
   await expect(page.getByRole("link", { name: "Urgent" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "No mailboxes connected" })).toBeVisible();
 
@@ -35,7 +24,7 @@ test("a new user signs up, sees the app shell, signs out and signs back in", asy
 
 test("a wrong password shows an error and stays on sign-in", async ({ page }) => {
   const email = uniqueEmail();
-  await signUp(page, email);
+  await signUp(page, { email });
   await page.context().clearCookies();
 
   await page.goto("/sign-in");
