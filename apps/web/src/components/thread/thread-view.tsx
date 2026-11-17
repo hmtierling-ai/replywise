@@ -58,7 +58,7 @@ export function ThreadView({ view, now }: { view: ThreadViewData; now: Date }) {
                 <EmailFrame srcDoc={buildEmailDocument(sanitizeEmailHtml(message.body.html))} />
               ) : (
                 <p className="whitespace-pre-wrap px-1 text-sm">
-                  {message.body?.text ?? message.snippet}
+                  {message.body?.text || message.snippet || "(no content)"}
                 </p>
               )}
             </div>

@@ -1,6 +1,6 @@
 import type { EmailAddress, MailProviderId } from "@replywise/core";
 import { getThreadForUser } from "@replywise/db";
-import { getValidAccessToken } from "@replywise/mailbox";
+import { clock, getValidAccessToken } from "@replywise/mailbox";
 import { decryptBody, type MessageBody } from "./body-codec";
 import type { SyncDeps } from "./deps";
 import { persistThreads } from "./persist";
@@ -54,7 +54,7 @@ export async function loadThreadForUser(
           emailAddress: detail.mailbox.emailAddress,
         };
         await deps.db.transaction((tx) =>
-          persistThreads(tx, deps.encryptor, mailbox, [thread], new Date()),
+          persistThreads(tx, deps.encryptor, mailbox, [thread], clock(deps)),
         );
         detail = (await getThreadForUser(deps.db, userId, threadId)) ?? detail;
       }

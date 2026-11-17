@@ -50,13 +50,12 @@ export async function persistThreads(
         isFromUser: message.from.address === owner,
         hasAttachments: message.hasAttachments,
       });
-      if (message.bodyText !== null || message.bodyHtml !== null) {
-        const blob = await encryptBody(encryptor, messageId, {
-          text: message.bodyText,
-          html: message.bodyHtml,
-        });
-        await setMessageBody(tx, messageId, blob, expiresAt);
-      }
+      // Always cache, even an empty body, so bodiless messages are not refetched on every view.
+      const blob = await encryptBody(encryptor, messageId, {
+        text: message.bodyText,
+        html: message.bodyHtml,
+      });
+      await setMessageBody(tx, messageId, blob, expiresAt);
     }
     await deleteMessagesNotIn(
       tx,

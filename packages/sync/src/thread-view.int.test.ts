@@ -103,4 +103,33 @@ describe("loadThreadForUser", () => {
     expect(view?.bodiesUnavailable).toBe(true);
     expect(view?.messages.every((m) => m.body === null)).toBe(true);
   });
+
+  it("caches bodiless messages so they are not refetched", async () => {
+    const { deps, gmail, userId, threadId } = await syncedMailbox();
+    gmail.threads.t1 = [
+      fakeMessage({
+        providerMessageId: "m1",
+        providerThreadId: "t1",
+        bodyHtml: null,
+        bodyText: null,
+      }),
+    ];
+    await db.update(messages).set({ bodyCiphertext: null, bodyExpiresAt: null });
+    const first = await loadThreadForUser(deps, userId, threadId);
+    expect(first?.bodiesUnavailable).toBe(false);
+    const calls = gmail.calls.getThread.length;
+    const second = await loadThreadForUser(deps, userId, threadId);
+    expect(second?.bodiesUnavailable).toBe(false);
+    expect(second?.messages[0]?.body).toEqual({ text: null, html: null });
+    expect(gmail.calls.getThread.length).toBe(calls);
+  });
+
+  it("marks bodies unavailable without throwing when the thread is gone from Gmail", async () => {
+    const { deps, gmail, userId, threadId } = await syncedMailbox();
+    await db.update(messages).set({ bodyCiphertext: null, bodyExpiresAt: null });
+    delete gmail.threads.t1;
+    const view = await loadThreadForUser(deps, userId, threadId);
+    expect(view?.bodiesUnavailable).toBe(true);
+    expect(view?.messages.every((m) => m.body === null)).toBe(true);
+  });
 });
