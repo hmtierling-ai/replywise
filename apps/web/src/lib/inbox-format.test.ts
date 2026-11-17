@@ -20,6 +20,9 @@ describe("formatParticipants", () => {
     expect(formatParticipants([{ name: "Me", address: "me@gmail.com" }], ["me@gmail.com"])).toBe(
       "me",
     );
+    expect(formatParticipants([{ name: "Me", address: "Me@Gmail.com" }], ["me@gmail.com"])).toBe(
+      "me",
+    );
     expect(formatParticipants([], [])).toBe("(no sender)");
   });
 });

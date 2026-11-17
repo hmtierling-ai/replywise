@@ -9,6 +9,13 @@ test("a mailbox that has not synced yet shows a syncing state", async ({ page })
   await expect(page.getByRole("heading", { name: "Syncing your inbox…" })).toBeVisible();
 });
 
+test("a mailbox that needs reauthorisation says it needs attention", async ({ page }) => {
+  const email = await signUp(page);
+  await withSeed((seed) => seed.mailbox(email, { status: "needs_reauth" }));
+  await page.goto("/inbox");
+  await expect(page.getByRole("heading", { name: "Your mailbox needs attention" })).toBeVisible();
+});
+
 test("synced threads are listed newest first with unread emphasis", async ({ page }) => {
   const email = await signUp(page);
   await withSeed(async (seed) => {

@@ -2,6 +2,7 @@ import { listInboxThreads, listMailAccounts } from "@replywise/db";
 import Link from "next/link";
 import { connection } from "next/server";
 import { EmptyInbox } from "@/components/inbox/empty-inbox";
+import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
@@ -31,12 +32,28 @@ export async function ThreadList() {
   const threads = await listInboxThreads(db, user.id);
   if (threads.length === 0) {
     const syncing = mailboxes.some((m) => m.status === "active" && m.lastSyncedAt === null);
-    return syncing ? (
-      <EmptyInbox
-        title="Syncing your inbox…"
-        description="Replywise is bringing in the last 30 days of mail. This usually takes a minute or two."
-      />
-    ) : (
+    if (syncing) {
+      return (
+        <EmptyInbox
+          title="Syncing your inbox…"
+          description="Replywise is bringing in the last 30 days of mail. This usually takes a minute or two."
+        />
+      );
+    }
+    if (mailboxes.some((m) => m.status !== "active")) {
+      return (
+        <EmptyInbox
+          title="Your mailbox needs attention"
+          description="Replywise can't sync right now. Check Settings → Mailboxes."
+          action={
+            <Button asChild size="sm">
+              <Link href="/settings/mailboxes">Open mailboxes</Link>
+            </Button>
+          }
+        />
+      );
+    }
+    return (
       <EmptyInbox
         title="You're all caught up"
         description="There is nothing in your inbox right now."
@@ -53,7 +70,7 @@ export async function ThreadList() {
           <Link
             href={`/thread/${thread.id}`}
             data-unread={thread.isUnread ? "true" : "false"}
-            className="flex flex-col gap-0.5 px-4 py-3 transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none sm:px-6"
+            className="flex flex-col gap-0.5 px-4 py-3 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:px-6"
           >
             <div className="flex items-baseline gap-3">
               {thread.isUnread ? (
@@ -71,12 +88,11 @@ export async function ThreadList() {
               >
                 {formatParticipants(thread.participants, ownEmails)}
               </span>
-              <time
-                dateTime={thread.lastMessageAt.toISOString()}
+              <LocalTime
+                iso={thread.lastMessageAt.toISOString()}
+                serverText={formatThreadTime(thread.lastMessageAt, now)}
                 className="shrink-0 text-xs text-muted-foreground"
-              >
-                {formatThreadTime(thread.lastMessageAt, now)}
-              </time>
+              />
             </div>
             <p
               className={cn(

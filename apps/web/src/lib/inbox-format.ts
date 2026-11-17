@@ -3,7 +3,7 @@ import type { EmailAddress } from "@replywise/core";
 export function formatParticipants(participants: EmailAddress[], ownEmails: string[]): string {
   if (participants.length === 0) return "(no sender)";
   const own = new Set(ownEmails.map((e) => e.toLowerCase()));
-  const others = participants.filter((p) => !own.has(p.address));
+  const others = participants.filter((p) => !own.has(p.address.toLowerCase()));
   if (others.length === 0) return "me";
   const names = others.map((p) => p.name ?? p.address);
   const shown = names.slice(0, 2).join(", ");
