@@ -53,6 +53,13 @@ export function createJobQueue(connection: Redis, options: { prefix?: string } =
         { name, data: definition.payload.parse(payload) },
       );
     },
+    async removeRepeating(queue, schedulerId) {
+      await queueFor(queue).removeJobScheduler(schedulerId);
+    },
+    async listRepeating(queue) {
+      const schedulers = await queueFor(queue).getJobSchedulers();
+      return schedulers.map((s) => s.key).filter((key): key is string => typeof key === "string");
+    },
     async close() {
       await Promise.all([...queues.values()].map((queue) => queue.close()));
     },

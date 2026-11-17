@@ -93,4 +93,25 @@ describe("BullMQ job queue", () => {
     const schedulers = await inspector.getJobSchedulers();
     expect(schedulers.map((s) => s.key)).toEqual(["purge-hourly"]);
   });
+
+  it("lists and removes job schedulers per queue", async () => {
+    const queue = createJobQueue(connection(), { prefix });
+    closers.push(() => queue.close());
+    const id = "00000000-0000-4000-8000-000000000001";
+    await queue.scheduleRepeating(
+      `mailbox.sync:${id}`,
+      "mailbox.sync",
+      { mailAccountId: id },
+      120_000,
+    );
+    expect(await queue.listRepeating("sync")).toEqual([`mailbox.sync:${id}`]);
+    await queue.removeRepeating("sync", `mailbox.sync:${id}`);
+    expect(await queue.listRepeating("sync")).toEqual([]);
+  });
+
+  it("rejects a mailbox.sync payload without a uuid", async () => {
+    const queue = createJobQueue(connection(), { prefix });
+    closers.push(() => queue.close());
+    await expect(queue.enqueue("mailbox.sync", { mailAccountId: "not-a-uuid" })).rejects.toThrow();
+  });
 });

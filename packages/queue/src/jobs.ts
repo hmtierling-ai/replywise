@@ -6,6 +6,8 @@ export type QueueName = "sync" | "ai" | "maintenance";
 export const jobDefinitions = {
   "maintenance.purgeBodies": { queue: "maintenance", payload: z.object({}).strict() },
   "maintenance.purgeOAuthStates": { queue: "maintenance", payload: z.object({}).strict() },
+  "maintenance.reconcileSyncSchedules": { queue: "maintenance", payload: z.object({}).strict() },
+  "mailbox.sync": { queue: "sync", payload: z.object({ mailAccountId: z.uuid() }).strict() },
 } as const satisfies Record<string, { queue: QueueName; payload: z.ZodType }>;
 
 export type JobName = keyof typeof jobDefinitions;
@@ -38,6 +40,8 @@ export interface JobQueue {
     payload: JobPayload<N>,
     everyMs: number,
   ): Promise<void>;
+  removeRepeating(queue: QueueName, schedulerId: string): Promise<void>;
+  listRepeating(queue: QueueName): Promise<string[]>;
   close(): Promise<void>;
 }
 

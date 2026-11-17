@@ -13,9 +13,13 @@
   },
   "dependencies": {
     "@replywise/config": "workspace:*",
+    "@replywise/crypto": "workspace:*",
     "@replywise/db": "workspace:*",
+    "@replywise/mail": "workspace:*",
+    "@replywise/mailbox": "workspace:*",
     "@replywise/observability": "workspace:*",
     "@replywise/queue": "workspace:*",
+    "@replywise/sync": "workspace:*",
     "bullmq": "^6.7.6",
     "drizzle-orm": "^0.45.4",
     "ioredis": "^6.0.0",

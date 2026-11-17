@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mailOAuthStates, messages } from "@replywise/db";
+import { aad } from "@replywise/crypto";
+import { mailAccounts, mailOAuthStates, messages, threads } from "@replywise/db";
 import {
   insertMailAccount,
   insertMessage,
@@ -9,14 +10,23 @@ import {
   setupTestDb,
   TEST_DATABASE_URL,
 } from "@replywise/db/testing";
+import { testEncryptor } from "@replywise/mailbox/testing";
 import { createLogger } from "@replywise/observability";
-import { createRedisConnection } from "@replywise/queue";
+import { createJobQueue, createRedisConnection } from "@replywise/queue";
+import { createFakeGmail, fakeMessage } from "@replywise/sync/testing";
 import { Queue } from "bullmq";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { purgeBodiesHandler } from "./jobs/purge-bodies";
 import { purgeOAuthStatesHandler } from "./jobs/purge-oauth-states";
-import { PURGE_BODIES_SCHEDULER_ID, PURGE_OAUTH_STATES_SCHEDULER_ID, startWorker } from "./main";
+import { reconcileSyncSchedulesHandler } from "./jobs/reconcile-sync-schedules";
+import { syncMailboxHandler } from "./jobs/sync-mailbox";
+import {
+  PURGE_BODIES_SCHEDULER_ID,
+  PURGE_OAUTH_STATES_SCHEDULER_ID,
+  RECONCILE_SCHEDULER_ID,
+  startWorker,
+} from "./main";
 
 const REDIS_URL = process.env.REDIS_URL_TEST ?? "redis://localhost:6379";
 const silentLogger = () => {
@@ -77,6 +87,64 @@ describe("purgeOAuthStatesHandler", () => {
   });
 });
 
+describe("reconcileSyncSchedulesHandler", () => {
+  it("schedules active Gmail mailboxes and removes schedules for the rest", async () => {
+    const { db } = handle;
+    const user = await insertUser(db);
+    const active = await insertMailAccount(db, user.id);
+    await insertMailAccount(db, user.id, { status: "needs_reauth" });
+    await insertMailAccount(db, user.id, { provider: "outlook" });
+    const connection = createRedisConnection(REDIS_URL);
+    const queue = createJobQueue(connection, { prefix: `test-${randomUUID()}` });
+    const stale = "00000000-0000-4000-8000-0000000000ff";
+    await queue.scheduleRepeating(
+      `mailbox.sync:${stale}`,
+      "mailbox.sync",
+      { mailAccountId: stale },
+      120_000,
+    );
+    const { logger } = silentLogger();
+    try {
+      await reconcileSyncSchedulesHandler({ db, queue, logger })();
+      expect(await queue.listRepeating("sync")).toEqual([`mailbox.sync:${active.id}`]);
+    } finally {
+      await queue.close();
+      await connection.quit();
+    }
+  });
+});
+
+describe("syncMailboxHandler", () => {
+  it("syncs a mailbox and logs only the outcome", async () => {
+    const { db } = handle;
+    const user = await insertUser(db);
+    const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+    const encryptor = testEncryptor();
+    const account = await insertMailAccount(db, user.id);
+    const blob = await encryptor.encrypt(
+      JSON.stringify({ accessToken: "a", refreshToken: "r", expiresAt }),
+      aad.mailTokens(account.id),
+    );
+    await db
+      .update(mailAccounts)
+      .set({ tokensCiphertext: blob })
+      .where(eq(mailAccounts.id, account.id));
+    const gmail = createFakeGmail({
+      threads: { t1: [fakeMessage({ providerThreadId: "t1", bodyText: "private words" })] },
+    });
+    const { logger, lines } = silentLogger();
+
+    await syncMailboxHandler({
+      syncDeps: { db, encryptor, providers: {}, gmail: gmail.factory },
+      logger,
+    })({ mailAccountId: account.id });
+
+    expect(await db.select().from(threads)).toHaveLength(1);
+    expect(lines.join("")).toContain('"status":"synced"');
+    expect(lines.join("")).not.toContain("private words");
+  });
+});
+
 describe("startWorker", () => {
   it("registers the hourly purge scheduler and stops cleanly", async () => {
     const queuePrefix = `test-${randomUUID()}`;
@@ -100,6 +168,7 @@ describe("startWorker", () => {
       const ids = schedulers.map((s) => s.key);
       expect(ids).toContain(PURGE_BODIES_SCHEDULER_ID);
       expect(ids).toContain(PURGE_OAUTH_STATES_SCHEDULER_ID);
+      expect(ids).toContain(RECONCILE_SCHEDULER_ID);
     } finally {
       await inspector.close();
       await connection.quit();

@@ -129,15 +129,27 @@ importers:
       '@replywise/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@replywise/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@replywise/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@replywise/mail':
+        specifier: workspace:*
+        version: link:../../packages/mail
+      '@replywise/mailbox':
+        specifier: workspace:*
+        version: link:../../packages/mailbox
       '@replywise/observability':
         specifier: workspace:*
         version: link:../../packages/observability
       '@replywise/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@replywise/sync':
+        specifier: workspace:*
+        version: link:../../packages/sync
       bullmq:
         specifier: ^6.7.6
         version: 6.7.6(ioredis@6.0.0)
