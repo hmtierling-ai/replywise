@@ -11,18 +11,40 @@ const REAUTH_MESSAGE = "Access was revoked or expired. Reconnect this mailbox.";
 
 type Outcome = { accessToken: string; provider: MailProviderId } | { reauth: true };
 
+function isFresh(expiresAt: string, now: Date): boolean {
+  return new Date(expiresAt).getTime() - REFRESH_SKEW_MS > now.getTime();
+}
+
 /**
  * Returns a usable access token, refreshing it when it expires within 5 minutes.
- * The mailbox row is locked (SELECT … FOR UPDATE) so concurrent callers never refresh twice —
- * important for Microsoft, which rotates refresh tokens.
+ * Fresh tokens are read without locking. Refreshes run under a row lock (SELECT … FOR UPDATE)
+ * and re-check freshness after acquiring it, so concurrent callers never refresh twice —
+ * important for Microsoft, which rotates refresh tokens. A successful refresh never changes
+ * the mailbox status or last error (sync owns those).
  *
- * NOT user-scoped: call only from trusted server code (e.g. the worker) with an id from a
- * trusted source, and never from inside an open transaction that touches the same mailbox row.
+ * NOT user-scoped: call only from trusted server code with an id from a trusted source, and
+ * never from inside an open transaction that touches the same mailbox row.
  */
 export async function getValidAccessToken(
   deps: MailboxDeps,
   mailAccountId: string,
 ): Promise<{ accessToken: string; provider: MailProviderId }> {
+  const [current] = await deps.db
+    .select({
+      id: mailAccounts.id,
+      status: mailAccounts.status,
+      provider: mailAccounts.provider,
+      tokensCiphertext: mailAccounts.tokensCiphertext,
+    })
+    .from(mailAccounts)
+    .where(eq(mailAccounts.id, mailAccountId));
+  if (!current) throw new MailAccountNotFoundError(mailAccountId);
+  if (current.status === "needs_reauth") throw new ReauthRequiredError(mailAccountId);
+  const stored = await decryptTokens(deps.encryptor, current.id, current.tokensCiphertext);
+  if (isFresh(stored.expiresAt, clock(deps))) {
+    return { accessToken: stored.accessToken, provider: current.provider };
+  }
+
   const outcome = await deps.db.transaction(async (tx): Promise<Outcome> => {
     const [account] = await tx
       .select()
@@ -34,7 +56,7 @@ export async function getValidAccessToken(
 
     const now = clock(deps);
     const tokens = await decryptTokens(deps.encryptor, account.id, account.tokensCiphertext);
-    if (new Date(tokens.expiresAt).getTime() - REFRESH_SKEW_MS > now.getTime()) {
+    if (isFresh(tokens.expiresAt, now)) {
       return { accessToken: tokens.accessToken, provider: account.provider };
     }
 
@@ -49,8 +71,6 @@ export async function getValidAccessToken(
           tokensCiphertext: await encryptTokens(deps.encryptor, account.id, grant.tokens),
           grantedScopes:
             grant.grantedScopes.length > 0 ? grant.grantedScopes : account.grantedScopes,
-          status: "active",
-          lastError: null,
         })
         .where(eq(mailAccounts.id, account.id));
       return { accessToken: grant.tokens.accessToken, provider: account.provider };

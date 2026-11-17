@@ -98,4 +98,64 @@ describe("getValidAccessToken", () => {
     );
     expect(fake.calls.refresh).toBe(1);
   });
+
+  it("does not wait for the row lock while the token is fresh", async () => {
+    const { at, mailAccountId } = await connected();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const holder = db.transaction(async (tx) => {
+      await tx.select().from(mailAccounts).where(eq(mailAccounts.id, mailAccountId)).for("update");
+      locked();
+      await gate;
+    });
+    await lockTaken;
+    const result = await Promise.race([
+      getValidAccessToken(at(new Date(T0.getTime() + 10 * MIN)), mailAccountId),
+      new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 1_000)),
+    ]);
+    release();
+    await holder;
+    expect(result).toEqual({ accessToken: "access-1", provider: "gmail" });
+  });
+
+  it("keeps an error status and message when a refresh succeeds", async () => {
+    const { at, mailAccountId } = await connected();
+    await db
+      .update(mailAccounts)
+      .set({ status: "error", lastError: "Gmail API request failed (500)" })
+      .where(eq(mailAccounts.id, mailAccountId));
+    const result = await getValidAccessToken(at(new Date(T0.getTime() + 58 * MIN)), mailAccountId);
+    expect(result.accessToken).toBe("access-2");
+    const [account] = await db
+      .select()
+      .from(mailAccounts)
+      .where(eq(mailAccounts.id, mailAccountId));
+    expect(account).toMatchObject({ status: "error", lastError: "Gmail API request failed (500)" });
+  });
+
+  it("leaves tokens and status unchanged when refresh fails for another reason", async () => {
+    const { fake, at, mailAccountId } = await connected({
+      refreshError: "temporarily_unavailable",
+    });
+    const later = at(new Date(T0.getTime() + 2 * 60 * MIN));
+    await expect(getValidAccessToken(later, mailAccountId)).rejects.toMatchObject({
+      code: "temporarily_unavailable",
+    });
+    const [account] = await db
+      .select()
+      .from(mailAccounts)
+      .where(eq(mailAccounts.id, mailAccountId));
+    expect(account?.status).toBe("active");
+    expect(fake.calls.refresh).toBe(1);
+    await expect(getValidAccessToken(later, mailAccountId)).rejects.toMatchObject({
+      code: "temporarily_unavailable",
+    });
+    expect(fake.calls.refresh).toBe(2);
+  });
 });

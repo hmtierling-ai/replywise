@@ -76,11 +76,15 @@ describe("disconnectMailbox", () => {
   });
 
   it("refuses to disconnect another user's mailbox", async () => {
-    const { d, mailAccountId } = await connect("gmail", true);
+    const { fake, d, mailAccountId } = await connect("gmail", true);
     const mallory = await insertUser(db);
     await expect(
       disconnectMailbox(d, { userId: mallory.id, mailAccountId }),
     ).rejects.toBeInstanceOf(MailAccountNotFoundError);
     expect(await db.select().from(mailAccounts)).toHaveLength(1);
+    expect(fake.calls.revoke).toBe(0);
+    expect(
+      (await db.select().from(auditLogs)).filter((a) => a.action === "mailbox.disconnected"),
+    ).toHaveLength(0);
   });
 });
