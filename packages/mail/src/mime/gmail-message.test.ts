@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type GmailMessageResource, parseGmailMessage } from "./gmail-message";
+import {
+  type GmailMessagePart,
+  type GmailMessageResource,
+  parseGmailMessage,
+} from "./gmail-message";
 
 const b64 = (s: string, encoding: BufferEncoding = "utf8") =>
   Buffer.from(s, encoding).toString("base64url");
@@ -129,5 +133,78 @@ describe("parseGmailMessage", () => {
       }),
     );
     expect(parsed.bodyText).toHaveLength(128_000);
+  });
+
+  it("strips NUL characters from every returned string", () => {
+    const parsed = parseGmailMessage(
+      message({
+        snippet: "snip\u0000pet",
+        payload: {
+          mimeType: "text/plain",
+          headers: [
+            { name: "From", value: "Ad\u0000a <ada\u0000@x.com>" },
+            { name: "To", value: "bo\u0000b@x.com" },
+            { name: "Subject", value: "Sub\u0000ject" },
+            { name: "Message-ID", value: "<a\u0000@x.com>" },
+          ],
+          body: { data: b64("bo\u0000dy") },
+        },
+      }),
+    );
+    const json = JSON.stringify(parsed);
+    expect(json).not.toContain("\\u0000");
+    expect(parsed.subject).toBe("Subject");
+    expect(parsed.snippet).toBe("snippet");
+    expect(parsed.bodyText).toBe("body");
+  });
+
+  it("does not produce an Invalid Date from an out-of-range internalDate", () => {
+    const parsed = parseGmailMessage(
+      message({
+        internalDate: "1e30",
+        payload: { mimeType: "text/plain", body: { data: b64("x") } },
+      }),
+    );
+    expect(parsed.sentAt.getTime()).toBe(0);
+  });
+
+  it("uses the Date header when internalDate is invalid", () => {
+    const parsed = parseGmailMessage(
+      message({
+        internalDate: "1e30",
+        payload: {
+          mimeType: "text/plain",
+          headers: [{ name: "Date", value: "Mon, 17 Nov 2025 09:30:00 +0000" }],
+          body: { data: b64("x") },
+        },
+      }),
+    );
+    expect(parsed.sentAt.toISOString()).toBe("2025-11-17T09:30:00.000Z");
+  });
+
+  it("parses payloads nested far deeper than MAX_MIME_DEPTH without throwing", () => {
+    let part: GmailMessagePart = { mimeType: "text/plain", body: { data: b64("deep") } };
+    for (let i = 0; i < 100; i++) part = { mimeType: "multipart/mixed", parts: [part] };
+    expect(() => parseGmailMessage(message({ payload: part }))).not.toThrow();
+  });
+
+  it("does not read bodies from inside an attachment part", () => {
+    const parsed = parseGmailMessage(
+      message({
+        payload: {
+          mimeType: "multipart/mixed",
+          parts: [
+            {
+              mimeType: "message/rfc822",
+              filename: "fwd.eml",
+              body: { attachmentId: "att-2", size: 512 },
+              parts: [{ mimeType: "text/plain", body: { data: b64("forwarded") } }],
+            },
+          ],
+        },
+      }),
+    );
+    expect(parsed.bodyText).toBeNull();
+    expect(parsed.hasAttachments).toBe(true);
   });
 });

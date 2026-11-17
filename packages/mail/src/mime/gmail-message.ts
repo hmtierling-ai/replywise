@@ -5,6 +5,15 @@ import { decodeHtmlEntities } from "./html-entities";
 
 export const MAX_BODY_HTML_CHARS = 256_000;
 export const MAX_BODY_TEXT_CHARS = 128_000;
+export const MAX_MIME_DEPTH = 32;
+
+function stripNul(s: string): string {
+  return s.replaceAll("\u0000", "");
+}
+
+function stripNulAddress(a: EmailAddress): EmailAddress {
+  return { name: a.name === null ? null : stripNul(a.name), address: stripNul(a.address) };
+}
 
 export interface GmailHeader {
   name: string;
@@ -78,14 +87,19 @@ function isAttachment(part: GmailMessagePart): boolean {
   return /^\s*attachment/i.test(disposition);
 }
 
-function walk(part: GmailMessagePart, visit: (p: GmailMessagePart) => void): void {
-  visit(part);
-  for (const child of part.parts ?? []) walk(child, visit);
+/** Visits parts depth-first. Attachments are reported but their children are not descended into. */
+function walk(part: GmailMessagePart, visit: (p: GmailMessagePart) => boolean, depth = 0): void {
+  if (depth > MAX_MIME_DEPTH) return;
+  if (!visit(part)) return;
+  for (const child of part.parts ?? []) walk(child, visit, depth + 1);
 }
 
 function sentAtOf(resource: GmailMessageResource, dateHeader: string | undefined): Date {
   const internal = Number(resource.internalDate);
-  if (resource.internalDate && Number.isFinite(internal)) return new Date(internal);
+  if (resource.internalDate) {
+    const date = new Date(internal);
+    if (Number.isFinite(date.getTime())) return date;
+  }
   const parsed = dateHeader ? Date.parse(dateHeader) : Number.NaN;
   return Number.isFinite(parsed) ? new Date(parsed) : new Date(0);
 }
@@ -101,27 +115,32 @@ export function parseGmailMessage(resource: GmailMessageResource): ParsedMessage
   walk(payload, (part) => {
     if (isAttachment(part)) {
       hasAttachments = true;
-      return;
+      return false;
     }
     const type = (part.mimeType ?? "").toLowerCase();
     if (type === "text/plain" && bodyText === null) bodyText = decodeBody(part);
     else if (type === "text/html" && bodyHtml === null) bodyHtml = decodeBody(part);
+    return true;
   });
 
   const messageId = header(headers, "Message-ID")?.trim();
+  const text = bodyText as string | null;
+  const html = bodyHtml as string | null;
   return {
-    providerMessageId: resource.id,
-    providerThreadId: resource.threadId,
-    internetMessageId: messageId ? messageId : null,
-    from: parseAddressList(header(headers, "From"))[0] ?? { name: null, address: "" },
-    to: parseAddressList(header(headers, "To")),
-    cc: parseAddressList(header(headers, "Cc")),
-    subject: decodeEncodedWords(header(headers, "Subject") ?? "").trim(),
-    snippet: decodeHtmlEntities(resource.snippet ?? ""),
+    providerMessageId: stripNul(resource.id),
+    providerThreadId: stripNul(resource.threadId),
+    internetMessageId: messageId ? stripNul(messageId) : null,
+    from: stripNulAddress(
+      parseAddressList(header(headers, "From"))[0] ?? { name: null, address: "" },
+    ),
+    to: parseAddressList(header(headers, "To")).map(stripNulAddress),
+    cc: parseAddressList(header(headers, "Cc")).map(stripNulAddress),
+    subject: stripNul(decodeEncodedWords(header(headers, "Subject") ?? "").trim()),
+    snippet: stripNul(decodeHtmlEntities(resource.snippet ?? "")),
     sentAt: sentAtOf(resource, header(headers, "Date")),
-    labelIds: resource.labelIds ?? [],
+    labelIds: (resource.labelIds ?? []).map(stripNul),
     hasAttachments,
-    bodyText: bodyText === null ? null : (bodyText as string).slice(0, MAX_BODY_TEXT_CHARS),
-    bodyHtml: bodyHtml === null ? null : (bodyHtml as string).slice(0, MAX_BODY_HTML_CHARS),
+    bodyText: text === null ? null : stripNul(text.slice(0, MAX_BODY_TEXT_CHARS)),
+    bodyHtml: html === null ? null : stripNul(html.slice(0, MAX_BODY_HTML_CHARS)),
   };
 }
