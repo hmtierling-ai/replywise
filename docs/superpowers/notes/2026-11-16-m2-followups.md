@@ -3,13 +3,17 @@
 Source: subagent-driven execution of `docs/superpowers/plans/2026-11-16-m2-mailbox-connection.md`.
 The final whole-branch review verdict was "ready to merge with fixes"; the fixes landed in `200fd23`.
 
-## Before merging M2
+## Manual verification (done 2026-11-17)
 
-- Manual verification with a real Gmail account (and Outlook if configured): connect, reconnect, disconnect;
-  confirm `tokens_ciphertext` holds no plaintext, Google's third-party access list no longer shows the app after
-  disconnect, and `audit_logs` records the actions (plan Task 11, Step 3).
-- While doing it, confirm the native connect form still reaches Google with CSP `form-action 'self'`
-  (the hydrated path is covered by e2e).
+- Real Gmail account connected through Settings → Mailboxes: status `active`, granted scopes exactly
+  `gmail.readonly` + `gmail.compose`, `tokens_ciphertext` (549 bytes) contains no `ya29`/`1//`/`accessToken`
+  plaintext, OAuth state consumed, `mailbox.connected` audited.
+- Disconnect: row deleted, `mailbox.disconnected` audited with `revoked: true`, app removed from
+  myaccount.google.com/permissions.
+- Not yet verified with a real account: Outlook (no Microsoft credentials configured); the no-JS native form
+  submission under CSP `form-action 'self'` (the hydrated path works).
+- Developer pitfall seen during the test: credentials were first saved as `GOOGLE_CLIENT_ID/SECRET` (app login)
+  instead of `GMAIL_CLIENT_ID/SECRET` (mailbox connection); `.env` files created before M2 lack the `GMAIL_*` lines.
 
 ## Carry into the M3 (sync) plan
 
