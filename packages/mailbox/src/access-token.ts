@@ -15,6 +15,9 @@ type Outcome = { accessToken: string; provider: MailProviderId } | { reauth: tru
  * Returns a usable access token, refreshing it when it expires within 5 minutes.
  * The mailbox row is locked (SELECT … FOR UPDATE) so concurrent callers never refresh twice —
  * important for Microsoft, which rotates refresh tokens.
+ *
+ * NOT user-scoped: call only from trusted server code (e.g. the worker) with an id from a
+ * trusted source, and never from inside an open transaction that touches the same mailbox row.
  */
 export async function getValidAccessToken(
   deps: MailboxDeps,

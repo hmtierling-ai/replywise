@@ -6,9 +6,10 @@ export class OAuthError extends Error {
   constructor(
     readonly code: string,
     readonly status: number,
-    description?: string,
+    readonly description?: string,
   ) {
-    super(description ? `${code}: ${description}` : code);
+    // message is the code only: descriptions are provider-supplied and may contain PII.
+    super(code);
     this.name = "OAuthError";
   }
 }
@@ -22,6 +23,16 @@ export class ProviderHttpError extends Error {
     super(`Provider request failed (${status}) at ${endpoint}`);
     this.name = "ProviderHttpError";
   }
+}
+
+/** Upper bound for any single provider HTTP call. */
+export const PROVIDER_TIMEOUT_MS = 10_000;
+
+function classify(error: unknown, url: string): unknown {
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    return new ProviderHttpError(0, new URL(url).pathname);
+  }
+  return error;
 }
 
 async function readJson(response: Response): Promise<Record<string, unknown>> {
@@ -38,14 +49,20 @@ export async function postForm(
   url: string,
   params: Record<string, string>,
 ): Promise<Record<string, unknown>> {
-  const response = await fetchImpl(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      accept: "application/json",
-    },
-    body: new URLSearchParams(params).toString(),
-  });
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        accept: "application/json",
+      },
+      body: new URLSearchParams(params).toString(),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw classify(error, url);
+  }
   const body = await readJson(response);
   if (!response.ok) {
     const code = typeof body.error === "string" ? body.error : "http_error";
@@ -61,9 +78,15 @@ export async function getJson(
   url: string,
   accessToken: string,
 ): Promise<Record<string, unknown>> {
-  const response = await fetchImpl(url, {
-    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
-  });
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw classify(error, url);
+  }
   if (!response.ok) throw new ProviderHttpError(response.status, new URL(url).pathname);
   return readJson(response);
 }

@@ -13,6 +13,8 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { getMailboxDeps, oauthCallbackUrl, requestContext } from "@/lib/mailbox";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Starts the OAuth flow. POST-only (Server Action), so other sites cannot trigger it. */
 export async function connectMailboxAction(formData: FormData): Promise<void> {
   const user = await requireUser();
@@ -38,6 +40,8 @@ export async function connectMailboxAction(formData: FormData): Promise<void> {
 export async function disconnectMailboxAction(formData: FormData): Promise<void> {
   const user = await requireUser();
   const mailAccountId = String(formData.get("mailAccountId") ?? "");
+
+  if (!UUID_RE.test(mailAccountId)) redirect(MAILBOXES_PATH);
 
   let target: string;
   try {

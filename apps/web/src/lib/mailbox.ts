@@ -1,7 +1,7 @@
 import "server-only";
 import { MAIL_PROVIDERS, type MailProviderId } from "@replywise/core";
 import { createMailOAuthProviders, type MailOAuthProviders } from "@replywise/mail";
-import type { MailboxDeps, RequestContext } from "@replywise/mailbox";
+import type { MailboxDeps } from "@replywise/mailbox";
 import { getEncryptor } from "./crypto";
 import { getDb } from "./db";
 import { getEnv } from "./env";
@@ -35,9 +35,4 @@ export function appUrl(path: string): URL {
   return new URL(path, getEnv().APP_URL);
 }
 
-export function requestContext(headers: Headers): RequestContext {
-  return {
-    ip: headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null,
-    userAgent: headers.get("user-agent")?.slice(0, 300) ?? null,
-  };
-}
+export { requestContext } from "./request-context";
