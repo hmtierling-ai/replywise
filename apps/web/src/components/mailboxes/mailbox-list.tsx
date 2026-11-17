@@ -1,10 +1,12 @@
 import { listMailAccounts, type MailAccountSummary } from "@replywise/db";
 import { Mail } from "lucide-react";
+import { connection } from "next/server";
 import { connectMailboxAction } from "@/app/(app)/settings/mailboxes/actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
+import { formatSyncStatus } from "@/lib/inbox-format";
 import { configuredMailProviders } from "@/lib/mailbox";
 import { PROVIDER_LABEL } from "@/lib/mailbox-messages";
 import { ConnectButtons } from "./connect-buttons";
@@ -22,6 +24,8 @@ const STATUS: Record<
 /** Reads the session and DB; render inside <Suspense>. */
 export async function MailboxList() {
   const user = await requireUser();
+  await connection();
+  const now = new Date();
   const accounts = await listMailAccounts(getDb(), user.id);
   const configured = configuredMailProviders();
 
@@ -39,7 +43,7 @@ export async function MailboxList() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{account.emailAddress}</p>
                   <p className="text-xs text-muted-foreground">
-                    {PROVIDER_LABEL[account.provider]}
+                    {PROVIDER_LABEL[account.provider]} · {formatSyncStatus(account, now)}
                   </p>
                 </div>
                 <Badge variant={status.variant}>{status.label}</Badge>
