@@ -1,0 +1,67 @@
+import type { Encryptor } from "@replywise/crypto";
+import {
+  type DbExecutor,
+  deleteMessagesNotIn,
+  deleteThreadsByProviderIds,
+  getBodyCacheDays,
+  setMessageBody,
+  upsertMessage,
+  upsertThread,
+} from "@replywise/db";
+import type { ParsedThread } from "@replywise/mail";
+import { encryptBody } from "./body-codec";
+import { summarizeThread } from "./thread-summary";
+
+const DAY_MS = 86_400_000;
+
+export interface PersistAccount {
+  id: string;
+  userId: string;
+  emailAddress: string;
+}
+
+/** Writes parsed threads (inside the caller's transaction). Threads without messages are deleted. */
+export async function persistThreads(
+  tx: DbExecutor,
+  encryptor: Encryptor,
+  account: PersistAccount,
+  parsed: ParsedThread[],
+  now: Date,
+): Promise<void> {
+  const expiresAt = new Date(now.getTime() + (await getBodyCacheDays(tx, account.userId)) * DAY_MS);
+  const owner = account.emailAddress.toLowerCase();
+
+  for (const thread of parsed) {
+    if (thread.messages.length === 0) {
+      await deleteThreadsByProviderIds(tx, account.id, [thread.providerThreadId]);
+      continue;
+    }
+    const threadId = await upsertThread(tx, account.id, summarizeThread(thread));
+    for (const message of thread.messages) {
+      const messageId = await upsertMessage(tx, threadId, account.id, {
+        providerMessageId: message.providerMessageId,
+        internetMessageId: message.internetMessageId,
+        fromAddress: message.from,
+        toAddresses: message.to,
+        ccAddresses: message.cc,
+        subject: message.subject,
+        snippet: message.snippet,
+        sentAt: message.sentAt,
+        isFromUser: message.from.address === owner,
+        hasAttachments: message.hasAttachments,
+      });
+      if (message.bodyText !== null || message.bodyHtml !== null) {
+        const blob = await encryptBody(encryptor, messageId, {
+          text: message.bodyText,
+          html: message.bodyHtml,
+        });
+        await setMessageBody(tx, messageId, blob, expiresAt);
+      }
+    }
+    await deleteMessagesNotIn(
+      tx,
+      threadId,
+      thread.messages.map((m) => m.providerMessageId),
+    );
+  }
+}
