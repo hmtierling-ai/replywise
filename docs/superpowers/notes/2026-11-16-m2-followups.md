@@ -22,7 +22,7 @@ The final whole-branch review verdict was "ready to merge with fixes"; the fixes
   or the sync job will self-deadlock. — done in M3
 - A successful refresh sets `status: "active"` and clears `last_error`; only reset when the status was
   `needs_reauth`, so sync errors are not clobbered. — done in M3
-- `completeConnect` should enqueue `mailbox.sync`; `disconnectMailbox` should remove the mailbox's scheduled jobs
+- `completeConnect` should enqueue `mailbox.sync`; `disconnectMailbox` should remove the mailbox's scheduled jobs — done in M3 differently: the worker reconcile job schedules new mailboxes and removes schedules for disconnected ones
   (spec §5, deliberately out of M2 scope).
 - Extend the no-send guard to `apps/worker/src` once it makes Gmail/Graph data calls. — done in M3
 - Test gaps: refresh failing with a non-`invalid_grant` error leaves state unchanged; cross-user disconnect makes
