@@ -1,0 +1,1 @@
+ALTER TABLE "mail_accounts" ADD COLUMN "sync_lease_until" timestamp with time zone;

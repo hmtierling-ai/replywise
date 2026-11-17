@@ -8,6 +8,13 @@
       "when": 1794786239383,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794956287728,
+      "tag": "0001_sync_lease",
+      "breakpoints": true
     }
   ]
 }

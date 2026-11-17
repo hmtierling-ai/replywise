@@ -33,6 +33,8 @@ export const mailAccounts = pgTable(
     syncCursor: text("sync_cursor"),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     lastError: text("last_error"),
+    /** Set while a sync job holds this mailbox; expired leases may be taken over. */
+    syncLeaseUntil: timestamp("sync_lease_until", { withTimezone: true }),
     autoDraftNeedsReply: boolean("auto_draft_needs_reply").notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
