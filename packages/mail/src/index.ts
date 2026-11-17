@@ -1,4 +1,5 @@
 export * from "./gmail";
+export * from "./gmail-api";
 export * from "./http";
 export * from "./mime/addresses";
 export * from "./mime/encoded-words";

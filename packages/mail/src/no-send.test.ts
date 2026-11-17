@@ -1,6 +1,15 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+
+// Every package and app that talks to mail providers. Missing dirs are skipped
+// (packages/sync/src arrives in a later task).
+const ROOTS = [
+  join(import.meta.dirname, "."),
+  join(import.meta.dirname, "../../mailbox/src"),
+  join(import.meta.dirname, "../../sync/src"),
+  join(import.meta.dirname, "../../../apps/worker/src"),
+].filter((dir) => existsSync(dir));
 
 // Spec §8: Replywise must never send email. Provider code may not reference send endpoints.
 const FORBIDDEN = [
@@ -21,8 +30,7 @@ describe("no-send guard", () => {
   });
 
   it("finds no send endpoints or send scopes in provider source", () => {
-    const dirs = [import.meta.dirname, join(import.meta.dirname, "../../mailbox/src")];
-    const sources = dirs.flatMap((dir) =>
+    const sources = ROOTS.flatMap((dir) =>
       (readdirSync(dir, { recursive: true }) as string[])
         .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))
         .map((file) => join(dir, file)),
