@@ -5,3 +5,4 @@ export * from "./errors";
 export * from "./persist";
 export * from "./sync-mailbox";
 export * from "./thread-summary";
+export * from "./thread-view";

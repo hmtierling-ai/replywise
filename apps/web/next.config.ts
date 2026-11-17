@@ -15,6 +15,7 @@ const nextConfig: NextConfig = {
     "@replywise/mail",
     "@replywise/mailbox",
     "@replywise/observability",
+    "@replywise/sync",
   ],
   poweredByHeader: false,
   turbopack: {
