@@ -19,16 +19,23 @@ The final whole-branch review verdict was "ready to merge with fixes"; the fixes
 
 - `getValidAccessToken` takes `SELECT … FOR UPDATE` even when the token is fresh. Add an unlocked fast path
   (lock and re-check only near expiry) and never call it inside an open transaction on the same mailbox row,
-  or the sync job will self-deadlock.
+  or the sync job will self-deadlock. — done in M3
 - A successful refresh sets `status: "active"` and clears `last_error`; only reset when the status was
-  `needs_reauth`, so sync errors are not clobbered.
+  `needs_reauth`, so sync errors are not clobbered. — done in M3
 - `completeConnect` should enqueue `mailbox.sync`; `disconnectMailbox` should remove the mailbox's scheduled jobs
   (spec §5, deliberately out of M2 scope).
-- Extend the no-send guard to `apps/worker/src` once it makes Gmail/Graph data calls.
+- Extend the no-send guard to `apps/worker/src` once it makes Gmail/Graph data calls. — done in M3
 - Test gaps: refresh failing with a non-`invalid_grant` error leaves state unchanged; cross-user disconnect makes
   no revoke call and writes no audit row; `missing_refresh_token`; `startConnect` row has the expected
-  `userId`/`provider`/`stateHash`; Outlook granted-scope contents; callback happy path against a stub token server.
-- UX: the inbox empty state still says "No mailboxes connected" after a mailbox is connected.
+  `userId`/`provider`/`stateHash`; Outlook granted-scope contents; callback happy path against a stub token server. — done in M3
+- UX: the inbox empty state still says "No mailboxes connected" after a mailbox is connected. — done in M3
+
+## M3 decisions to revisit
+
+- Sync schedules are created by a once-a-minute reconcile job in the worker instead of being
+  enqueued by the web app on connect (keeps Redis out of the web app); first sync starts within ~1 minute.
+- Email HTML keeps no inline styles (sanitize-html allow-list); layout-heavy newsletters render plainly.
+- Outlook mailboxes are not synced yet (Graph delta sync is the next milestone).
 
 ## M6 (hardening) list
 

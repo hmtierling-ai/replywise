@@ -62,3 +62,19 @@ registered once by the developer. Put the values in `.env` (git-ignored).
 4. `.env`: `OUTLOOK_CLIENT_ID=<Application (client) ID>` and `OUTLOOK_CLIENT_SECRET=<secret value>`
 
 Restart the dev server after editing `.env`, then open **Settings → Mailboxes**.
+
+## Syncing mail in development
+
+The worker syncs every active Gmail mailbox: the last 30 days of inbox threads on the first run,
+then changes every 2 minutes (schedules are reconciled once a minute, so a new mailbox starts
+within about a minute of connecting).
+
+```bash
+docker compose up -d --wait
+pnpm db:migrate
+pnpm --filter @replywise/worker dev   # terminal 1 — needs GMAIL_CLIENT_ID/SECRET in .env to refresh tokens
+pnpm --filter @replywise/web dev      # terminal 2
+```
+
+Message bodies are cached encrypted for `body_cache_days` (default 14) and refetched on demand
+when you open an older thread. Replywise only reads mail; it never sends.
