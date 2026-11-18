@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createGmailApi, HistoryExpiredError } from "./gmail-api";
+import { createGmailApi, GMAIL_COST, HistoryExpiredError } from "./gmail-api";
 import { ProviderHttpError } from "./http";
 import type { FetchLike } from "./types";
 
@@ -153,7 +153,10 @@ describe("createGmailApi", () => {
       await api.getThread("a");
       await api.getThread("b");
       await api.getThread("c");
-      expect(clock.sleeps.reduce((a, b) => a + b, 0)).toBeCloseTo(2000, -1);
+      expect(clock.sleeps.reduce((a, b) => a + b, 0)).toBeCloseTo(
+        2 * (GMAIL_COST.getThread / 10) * 1000,
+        -1,
+      );
     });
 
     it("retries a rate-limited 403 with exponential backoff", async () => {

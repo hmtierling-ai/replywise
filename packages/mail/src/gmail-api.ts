@@ -46,18 +46,25 @@ function refs(value: unknown): Ref[] {
 
 export interface GmailApiOptions {
   fetch?: FetchLike;
-  /** Quota budget spent per second (Gmail allows 250 units/s/user burst, 6000/min sustained). */
+  /** Quota budget spent per second, in GMAIL_COST units (default 90 ≈ 90% of 6000/min). */
   unitsPerSecond?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   maxRetries?: number;
 }
 
+/**
+ * Per-call quota cost used for pacing. Measured against a real account
+ * (totalQueryCostPerMinutePerUser = 6000): threads.get?format=full exhausted the budget after
+ * ~51 calls, i.e. ~115 units each — far above the documented 10. Values are conservative.
+ */
+export const GMAIL_COST = { profile: 10, listThreads: 100, getThread: 120, listHistory: 20 };
+
 const MAX_BACKOFF_MS = 60_000;
 
 export function createGmailApi(accessToken: string, options: GmailApiOptions = {}): GmailApi {
   const fetchImpl: FetchLike = options.fetch ?? ((url, init) => fetch(url, init));
-  const unitsPerSecond = options.unitsPerSecond ?? 50;
+  const unitsPerSecond = options.unitsPerSecond ?? 90;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = options.now ?? (() => Date.now());
   const maxRetries = options.maxRetries ?? 4;
@@ -87,7 +94,7 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
 
   return {
     async getProfile() {
-      const body = await get(new URL(`${BASE}/profile`), 1);
+      const body = await get(new URL(`${BASE}/profile`), GMAIL_COST.profile);
       if (typeof body.emailAddress !== "string" || body.historyId === undefined) {
         throw new ProviderHttpError(200, "/gmail/v1/users/me/profile");
       }
@@ -99,7 +106,7 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
       url.searchParams.set("q", query);
       url.searchParams.set("maxResults", String(maxResults));
       if (pageToken) url.searchParams.set("pageToken", pageToken);
-      const body = await get(url, 10);
+      const body = await get(url, GMAIL_COST.listThreads);
       const threads = Array.isArray(body.threads) ? (body.threads as Array<{ id?: unknown }>) : [];
       return {
         ids: threads.map((t) => t.id).filter((id): id is string => typeof id === "string"),
@@ -112,7 +119,7 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
       url.searchParams.set("format", "full");
       let body: Record<string, unknown>;
       try {
-        body = await get(url, 10);
+        body = await get(url, GMAIL_COST.getThread);
       } catch (error) {
         if (error instanceof ProviderHttpError && error.status === 404) return null;
         throw error;
@@ -136,7 +143,7 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
       if (pageToken) url.searchParams.set("pageToken", pageToken);
       let body: Record<string, unknown>;
       try {
-        body = await get(url, 2);
+        body = await get(url, GMAIL_COST.listHistory);
       } catch (error) {
         if (error instanceof ProviderHttpError && error.status === 404) {
           throw new HistoryExpiredError();
