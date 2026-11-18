@@ -44,13 +44,50 @@ function refs(value: unknown): Ref[] {
   return Array.isArray(value) ? (value as Ref[]) : [];
 }
 
-export function createGmailApi(accessToken: string, options: { fetch?: FetchLike } = {}): GmailApi {
+export interface GmailApiOptions {
+  fetch?: FetchLike;
+  /** Quota budget spent per second (Gmail allows 250 units/s/user burst, 6000/min sustained). */
+  unitsPerSecond?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  maxRetries?: number;
+}
+
+const MAX_BACKOFF_MS = 60_000;
+
+export function createGmailApi(accessToken: string, options: GmailApiOptions = {}): GmailApi {
   const fetchImpl: FetchLike = options.fetch ?? ((url, init) => fetch(url, init));
-  const get = (url: URL) => getJson(fetchImpl, url.toString(), accessToken);
+  const unitsPerSecond = options.unitsPerSecond ?? 50;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = options.now ?? (() => Date.now());
+  const maxRetries = options.maxRetries ?? 4;
+  let nextFree = 0;
+
+  async function reserve(cost: number): Promise<void> {
+    // Bookkeeping is synchronous so concurrent callers get distinct slots.
+    const start = Math.max(now(), nextFree);
+    nextFree = start + (cost / unitsPerSecond) * 1000;
+    const wait = start - now();
+    if (wait > 0) await sleep(wait);
+  }
+
+  async function get(url: URL, cost: number): Promise<Record<string, unknown>> {
+    for (let attempt = 0; ; attempt++) {
+      await reserve(cost);
+      try {
+        return await getJson(fetchImpl, url.toString(), accessToken);
+      } catch (error) {
+        if (!(error instanceof ProviderHttpError) || !error.rateLimited || attempt >= maxRetries) {
+          throw error;
+        }
+        await sleep(Math.min(error.retryAfterMs ?? 2000 * 2 ** attempt, MAX_BACKOFF_MS));
+      }
+    }
+  }
 
   return {
     async getProfile() {
-      const body = await get(new URL(`${BASE}/profile`));
+      const body = await get(new URL(`${BASE}/profile`), 1);
       if (typeof body.emailAddress !== "string" || body.historyId === undefined) {
         throw new ProviderHttpError(200, "/gmail/v1/users/me/profile");
       }
@@ -62,7 +99,7 @@ export function createGmailApi(accessToken: string, options: { fetch?: FetchLike
       url.searchParams.set("q", query);
       url.searchParams.set("maxResults", String(maxResults));
       if (pageToken) url.searchParams.set("pageToken", pageToken);
-      const body = await get(url);
+      const body = await get(url, 10);
       const threads = Array.isArray(body.threads) ? (body.threads as Array<{ id?: unknown }>) : [];
       return {
         ids: threads.map((t) => t.id).filter((id): id is string => typeof id === "string"),
@@ -75,7 +112,7 @@ export function createGmailApi(accessToken: string, options: { fetch?: FetchLike
       url.searchParams.set("format", "full");
       let body: Record<string, unknown>;
       try {
-        body = await get(url);
+        body = await get(url, 10);
       } catch (error) {
         if (error instanceof ProviderHttpError && error.status === 404) return null;
         throw error;
@@ -99,7 +136,7 @@ export function createGmailApi(accessToken: string, options: { fetch?: FetchLike
       if (pageToken) url.searchParams.set("pageToken", pageToken);
       let body: Record<string, unknown>;
       try {
-        body = await get(url);
+        body = await get(url, 2);
       } catch (error) {
         if (error instanceof ProviderHttpError && error.status === 404) {
           throw new HistoryExpiredError();

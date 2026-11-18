@@ -19,6 +19,8 @@ export class ProviderHttpError extends Error {
   constructor(
     readonly status: number,
     readonly endpoint: string,
+    readonly rateLimited = false,
+    readonly retryAfterMs?: number,
   ) {
     super(`Provider request failed (${status}) at ${endpoint}`);
     this.name = "ProviderHttpError";
@@ -73,6 +75,33 @@ export async function postForm(
   return body;
 }
 
+const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded"]);
+
+function reasonsOf(value: unknown): unknown[] {
+  return Array.isArray(value)
+    ? value.map((item) =>
+        item && typeof item === "object" ? (item as { reason?: unknown }).reason : undefined,
+      )
+    : [];
+}
+
+function isRateLimited(status: number, body: Record<string, unknown>): boolean {
+  if (status === 429) return true;
+  if (status !== 403) return false;
+  const error = body.error;
+  if (!error || typeof error !== "object") return false;
+  const { errors, details } = error as { errors?: unknown; details?: unknown };
+  return (
+    reasonsOf(errors).some((r) => typeof r === "string" && RATE_LIMIT_REASONS.has(r)) ||
+    reasonsOf(details).some((r) => r === "RATE_LIMIT_EXCEEDED")
+  );
+}
+
+function parseRetryAfterMs(header: string | null): number | undefined {
+  if (header === null || !/^\d+$/.test(header.trim())) return undefined;
+  return Number(header.trim()) * 1000;
+}
+
 export async function getJson(
   fetchImpl: FetchLike,
   url: string,
@@ -87,7 +116,19 @@ export async function getJson(
   } catch (error) {
     throw classify(error, url);
   }
-  if (!response.ok) throw new ProviderHttpError(response.status, new URL(url).pathname);
+  if (!response.ok) {
+    const pathname = new URL(url).pathname;
+    const body = await readJson(response);
+    if (isRateLimited(response.status, body)) {
+      throw new ProviderHttpError(
+        response.status,
+        pathname,
+        true,
+        parseRetryAfterMs(response.headers.get("retry-after")),
+      );
+    }
+    throw new ProviderHttpError(response.status, pathname);
+  }
   return readJson(response);
 }
 
