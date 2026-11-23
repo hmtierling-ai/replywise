@@ -12,7 +12,10 @@ import {
 } from "./errors";
 import type { AiProvider } from "./types";
 
-/** Low effort still thinks on Opus 5.5; leave room so the JSON is never cut off. */
+/**
+ * Low effort still thinks on Opus 5.5, and thinking tokens count against this limit,
+ * so leave room so the JSON is never cut off.
+ */
 export const CLASSIFY_MAX_TOKENS = 4_096;
 /** Models that accept the server-side refusal fallback (Haiku 5.5 does not). */
 const FALLBACK_MODELS = new Set(["claude-opus-5-5"]);
@@ -32,8 +35,8 @@ function mapError(error: unknown): Error {
       ? new AiUnavailableError(status)
       : new AiRequestError(status);
   }
-  // Parsing/validation failures of the structured output.
-  return new AiOutputError();
+  // Any other (non-SDK) failure, e.g. a network fault.
+  return new AiUnavailableError(0);
 }
 
 export function createAnthropicProvider(
@@ -67,9 +70,10 @@ export function createAnthropicProvider(
       const fallback = FALLBACK_MODELS.has(ctx.model)
         ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
         : {};
-      let response: Awaited<ReturnType<typeof client.beta.messages.parse>>;
+      let response: Awaited<ReturnType<typeof client.beta.messages.create>>;
       try {
-        response = await client.beta.messages.parse({
+        // `create` (not `parse`) so usage is still recorded when the output fails to parse.
+        response = await client.beta.messages.create({
           model: ctx.model,
           max_tokens: CLASSIFY_MAX_TOKENS,
           ...fallback,
@@ -82,15 +86,26 @@ export function createAnthropicProvider(
       } catch (error) {
         throw mapError(error);
       }
-      await ctx.onUsage({
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
-        cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
-      });
+      try {
+        await ctx.onUsage({
+          inputTokens:
+            response.usage.input_tokens + (response.usage.cache_creation_input_tokens ?? 0),
+          outputTokens: response.usage.output_tokens,
+          cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+        });
+      } catch {
+        // usage accounting must not change the classification outcome
+      }
       if (response.stop_reason === "refusal") throw new AiRefusalError();
-      const parsed = response.parsed_output;
-      if (!parsed) throw new AiOutputError();
-      return normalizeClassifyOutput(parsed);
+      const text = response.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+      let parsed: ReturnType<typeof ClassifyOutputSchema.safeParse>;
+      try {
+        parsed = ClassifyOutputSchema.safeParse(JSON.parse(text));
+      } catch {
+        throw new AiOutputError();
+      }
+      if (!parsed.success || response.stop_reason === "max_tokens") throw new AiOutputError();
+      return normalizeClassifyOutput(parsed.data);
     },
   };
 }
