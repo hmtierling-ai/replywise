@@ -17,6 +17,16 @@ describe("normalizeClassifyOutput", () => {
       reasons: ["First.", "Second.", "Third."],
     });
   });
+  it("maps non-finite scores to the lowest score", () => {
+    const result = normalizeClassifyOutput({
+      urgency: Number.NaN,
+      importance: Number.POSITIVE_INFINITY,
+      needs_reply: false,
+      reasons: ["Ok."],
+    });
+    expect(result.urgency).toBe(1);
+    expect(result.importance).toBe(1);
+  });
   it("supplies a neutral reason when none is given", () => {
     expect(
       normalizeClassifyOutput({ urgency: 2.6, importance: 3, needs_reply: false, reasons: [] })

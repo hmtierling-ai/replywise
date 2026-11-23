@@ -11,7 +11,9 @@ export const ClassifyOutputSchema = z.object({
 
 export type ClassifyOutput = z.infer<typeof ClassifyOutputSchema>;
 
-const clampScore = (n: number) => Math.min(5, Math.max(1, Math.round(n)));
+/** Non-finite scores (NaN, ±Infinity) fall back to the lowest score rather than leaking through. */
+const clampScore = (n: number) =>
+  Number.isFinite(n) ? Math.min(5, Math.max(1, Math.round(n))) : 1;
 
 export function normalizeClassifyOutput(output: ClassifyOutput): ClassifyResult {
   const reasons = output.reasons

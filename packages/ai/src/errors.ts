@@ -1,5 +1,10 @@
 /** Base class: messages are fixed strings, safe to log (no provider text, no email content). */
-export class AiError extends Error {}
+export class AiError extends Error {
+  constructor(message = "AI error") {
+    super(message);
+    this.name = "AiError";
+  }
+}
 
 export class AiKeyInvalidError extends AiError {
   constructor() {
