@@ -111,7 +111,11 @@ describe("listThreadsPendingClassification", () => {
     expect(await listThreadsPendingClassification(db, since)).toEqual([]); // no key yet
     await validKey(alice.id);
     expect(await listThreadsPendingClassification(db, since)).toEqual([
-      { threadId: fresh.thread.id, latestMessageId: fresh.message.id },
+      {
+        threadId: fresh.thread.id,
+        latestMessageId: fresh.message.id,
+        credentialVersion: expect.any(Number),
+      },
     ]);
 
     await upsertThreadInsight(db, {
@@ -130,7 +134,11 @@ describe("listThreadsPendingClassification", () => {
 
     const reply = await insertMessage(db, fresh.thread.id, box.id, { sentAt: now });
     expect(await listThreadsPendingClassification(db, since)).toEqual([
-      { threadId: fresh.thread.id, latestMessageId: reply.id },
+      {
+        threadId: fresh.thread.id,
+        latestMessageId: reply.id,
+        credentialVersion: expect.any(Number),
+      },
     ]);
 
     await markAiCredentialInvalid(db, alice.id);
@@ -158,6 +166,18 @@ describe("listThreadsPendingClassification branches", () => {
     expect(await listThreadsPendingClassification(db, since)).toEqual([]);
   });
 
+  it("changes credentialVersion when the key is re-saved", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    await inboxThread(box.id, new Date(now.getTime() - DAY));
+    await validKey(alice.id);
+    const [first] = await listThreadsPendingClassification(db, since);
+    await new Promise((r) => setTimeout(r, 20));
+    await validKey(alice.id);
+    const [second] = await listThreadsPendingClassification(db, since);
+    expect(second?.credentialVersion).toBeGreaterThan(first?.credentialVersion ?? 0);
+  });
+
   it("skips threads of mailboxes that are not active", async () => {
     const alice = await insertUser(db);
     const box = await insertMailAccount(db, alice.id, { status: "needs_reauth" });
@@ -175,7 +195,11 @@ describe("listThreadsPendingClassification branches", () => {
     await inboxThread(bobBox.id, new Date(now.getTime() - DAY));
     await validKey(alice.id);
     expect(await listThreadsPendingClassification(db, since)).toEqual([
-      { threadId: a.thread.id, latestMessageId: a.message.id },
+      {
+        threadId: a.thread.id,
+        latestMessageId: a.message.id,
+        credentialVersion: expect.any(Number),
+      },
     ]);
     await saveAiCredential(db, {
       userId: bob.id,
@@ -185,7 +209,11 @@ describe("listThreadsPendingClassification branches", () => {
       lastValidatedAt: null,
     });
     expect(await listThreadsPendingClassification(db, since)).toEqual([
-      { threadId: a.thread.id, latestMessageId: a.message.id },
+      {
+        threadId: a.thread.id,
+        latestMessageId: a.message.id,
+        credentialVersion: expect.any(Number),
+      },
     ]);
   });
 });

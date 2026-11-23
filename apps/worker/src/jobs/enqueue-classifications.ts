@@ -19,13 +19,13 @@ export function enqueueClassificationsHandler(deps: {
       new Date(now.getTime() - CLASSIFY_WINDOW_MS),
       CLASSIFY_SCAN_LIMIT,
     );
-    for (const { threadId, latestMessageId } of pending) {
+    for (const { threadId, latestMessageId, credentialVersion } of pending) {
       // BullMQ custom ids cannot contain ":". One job per (thread, newest message): a failed
-      // job is not retried by the scan, and a new message gets a new id.
+      // job is not retried by the scan, and a new message or a re-saved key gets a new id.
       await deps.queue.enqueue(
         "thread.classify",
-        { threadId },
-        { jobId: `classify_${threadId}_${latestMessageId}` },
+        { threadId, messageId: latestMessageId },
+        { jobId: `classify_${threadId}_${latestMessageId}_${credentialVersion}` },
       );
     }
     if (pending.length > 0)

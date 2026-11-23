@@ -8,7 +8,10 @@ export const jobDefinitions = {
   "maintenance.purgeOAuthStates": { queue: "maintenance", payload: z.object({}).strict() },
   "maintenance.reconcileSyncSchedules": { queue: "maintenance", payload: z.object({}).strict() },
   "maintenance.enqueueClassifications": { queue: "maintenance", payload: z.object({}).strict() },
-  "thread.classify": { queue: "ai", payload: z.object({ threadId: z.uuid() }).strict() },
+  "thread.classify": {
+    queue: "ai",
+    payload: z.object({ threadId: z.uuid(), messageId: z.uuid() }).strict(),
+  },
   "mailbox.sync": { queue: "sync", payload: z.object({ mailAccountId: z.uuid() }).strict() },
 } as const satisfies Record<string, { queue: QueueName; payload: z.ZodType }>;
 

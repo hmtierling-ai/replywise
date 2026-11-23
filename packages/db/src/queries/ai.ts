@@ -219,9 +219,14 @@ export async function listThreadsPendingClassification(
   db: DbExecutor,
   since: Date,
   limit = 200,
-): Promise<Array<{ threadId: string; latestMessageId: string }>> {
-  const rows = await db.execute<{ thread_id: string; latest_message_id: string }>(sql`
-    select t.id as thread_id, latest.id as latest_message_id
+): Promise<Array<{ threadId: string; latestMessageId: string; credentialVersion: number }>> {
+  const rows = await db.execute<{
+    thread_id: string;
+    latest_message_id: string;
+    credential_version: string;
+  }>(sql`
+    select t.id as thread_id, latest.id as latest_message_id,
+      (extract(epoch from c.updated_at) * 1000)::bigint as credential_version
     from ${threads} t
     join ${mailAccounts} ma on ma.id = t.mail_account_id and ma.status = 'active'
     join ${aiCredentials} c
@@ -241,7 +246,11 @@ export async function listThreadsPendingClassification(
     order by t.last_message_at desc
     limit ${limit}
   `);
-  return [...rows].map((r) => ({ threadId: r.thread_id, latestMessageId: r.latest_message_id }));
+  return [...rows].map((r) => ({
+    threadId: r.thread_id,
+    latestMessageId: r.latest_message_id,
+    credentialVersion: Number(r.credential_version),
+  }));
 }
 
 export interface ClassificationSource {

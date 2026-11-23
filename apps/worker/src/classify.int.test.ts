@@ -1,9 +1,10 @@
-import { AiKeyInvalidError } from "@replywise/ai";
+import { AiKeyInvalidError, AiRateLimitedError, AiRefusalError } from "@replywise/ai";
 import { createFakeAiProvider } from "@replywise/ai/testing";
-import { aad } from "@replywise/crypto";
+import { aad, createEncryptor, LocalKeyProvider } from "@replywise/crypto";
 import {
   getAiCredentialSummary,
   getThreadInsight,
+  listThreadsPendingClassification,
   markAiCredentialInvalid,
   messages,
   saveAiCredential,
@@ -22,7 +23,7 @@ import { createLogger } from "@replywise/observability";
 import type { JobQueue } from "@replywise/queue";
 import { encryptBody } from "@replywise/sync";
 import { UnrecoverableError } from "bullmq";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { classifyThreadHandler } from "./jobs/classify-thread";
 import { enqueueClassificationsHandler } from "./jobs/enqueue-classifications";
@@ -51,7 +52,7 @@ async function seed() {
   const m1 = await insertMessage(db, thread.id, account.id, {
     fromAddress: { name: "Client", address: "client@example.com" },
     sentAt: new Date(Date.now() - 2 * HOUR_MS),
-    snippet: "Can you sign by Friday?",
+    snippet: "snippet-only preview",
   });
   await db
     .update(messages)
@@ -87,7 +88,10 @@ describe("classifyThreadHandler", () => {
         reasons: ["Client asks for a signature."],
       },
     });
-    await classifyThreadHandler({ db, encryptor, ai, logger })({ threadId: thread.id }, ctx);
+    await classifyThreadHandler({ db, encryptor, ai, logger })(
+      { threadId: thread.id, messageId: m1.id },
+      ctx,
+    );
     expect(ai.calls).toHaveLength(1);
     expect(ai.calls[0]?.apiKey).toBe("sk-ant-test-key");
     expect(ai.calls[0]?.model).toBe("claude-opus-5-5");
@@ -108,37 +112,43 @@ describe("classifyThreadHandler", () => {
 
   it("skips threads already classified through their newest message, or whose newest message is the user's", async () => {
     const { db } = handle;
-    const { account, thread } = await seed();
+    const { account, thread, m1 } = await seed();
     const ai = createFakeAiProvider();
     const handler = classifyThreadHandler({ db, encryptor, ai, logger });
-    await handler({ threadId: thread.id }, ctx);
-    await handler({ threadId: thread.id }, ctx);
+    await handler({ threadId: thread.id, messageId: m1.id }, ctx);
+    await handler({ threadId: thread.id, messageId: m1.id }, ctx);
     expect(ai.calls).toHaveLength(1);
     await insertMessage(db, thread.id, account.id, {
       isFromUser: true,
       fromAddress: { name: "Alice", address: "alice@gmail.com" },
       sentAt: new Date(Date.now() - HOUR_MS),
     });
-    await handler({ threadId: thread.id }, ctx);
+    await handler({ threadId: thread.id, messageId: m1.id }, ctx);
     expect(ai.calls).toHaveLength(1);
   });
 
   it("marks the key invalid and fails permanently when the provider rejects it", async () => {
     const { db } = handle;
-    const { alice, thread } = await seed();
+    const { alice, thread, m1 } = await seed();
     const ai = createFakeAiProvider({ error: new AiKeyInvalidError() });
     await expect(
-      classifyThreadHandler({ db, encryptor, ai, logger })({ threadId: thread.id }, ctx),
+      classifyThreadHandler({ db, encryptor, ai, logger })(
+        { threadId: thread.id, messageId: m1.id },
+        ctx,
+      ),
     ).rejects.toBeInstanceOf(UnrecoverableError);
     expect((await getAiCredentialSummary(db, alice.id))?.status).toBe("invalid");
   });
 
   it("does nothing without a valid key", async () => {
     const { db } = handle;
-    const { alice, thread } = await seed();
+    const { alice, thread, m1 } = await seed();
     await markAiCredentialInvalid(db, alice.id);
     const ai = createFakeAiProvider();
-    await classifyThreadHandler({ db, encryptor, ai, logger })({ threadId: thread.id }, ctx);
+    await classifyThreadHandler({ db, encryptor, ai, logger })(
+      { threadId: thread.id, messageId: m1.id },
+      ctx,
+    );
     expect(ai.calls).toHaveLength(0);
     expect(await getThreadInsight(db, thread.id)).toBeNull();
   });
@@ -155,12 +165,141 @@ describe("enqueueClassificationsHandler", () => {
       },
     } as unknown as JobQueue;
     await enqueueClassificationsHandler({ db, queue, logger })({}, ctx);
+    const first = await listThreadsPendingClassification(db, new Date(0));
+    expect(first).toHaveLength(1);
     expect(enqueued).toEqual([
       {
         name: "thread.classify",
-        payload: { threadId: thread.id },
-        jobId: `classify_${thread.id}_${m1.id}`,
+        payload: { threadId: thread.id, messageId: m1.id },
+        jobId: `classify_${thread.id}_${m1.id}_${first[0]?.credentialVersion}`,
       },
     ]);
+  });
+
+  it("produces a new job id after the key is re-saved", async () => {
+    const { db } = handle;
+    const { alice } = await seed();
+    const ids: string[] = [];
+    const queue = {
+      async enqueue(_name: string, _payload: unknown, options?: { jobId?: string }) {
+        ids.push(options?.jobId ?? "");
+      },
+    } as unknown as JobQueue;
+    const scan = enqueueClassificationsHandler({ db, queue, logger });
+    await scan({}, ctx);
+    await new Promise((r) => setTimeout(r, 20));
+    await saveAiCredential(db, {
+      userId: alice.id,
+      keyCiphertext: await encryptor.encrypt(
+        "sk-ant-test-key",
+        aad.aiCredential(alice.id, "anthropic"),
+      ),
+      keyHint: "-key",
+      status: "valid",
+      lastValidatedAt: new Date(),
+    });
+    await scan({}, ctx);
+    expect(ids).toHaveLength(2);
+    expect(ids[1]).not.toBe(ids[0]);
+  });
+});
+
+describe("classifyThreadHandler errors and guards", () => {
+  it("rethrows a retryable AI error as it is", async () => {
+    const { db } = handle;
+    const { thread, m1 } = await seed();
+    const error = new AiRateLimitedError();
+    const ai = createFakeAiProvider({ error });
+    await expect(
+      classifyThreadHandler({ db, encryptor, ai, logger })(
+        { threadId: thread.id, messageId: m1.id },
+        ctx,
+      ),
+    ).rejects.toBe(error);
+  });
+
+  it("turns a refusal into a permanent failure carrying only the error name", async () => {
+    const { db } = handle;
+    const { thread, m1 } = await seed();
+    const ai = createFakeAiProvider({ error: new AiRefusalError() });
+    const rejection = await classifyThreadHandler({ db, encryptor, ai, logger })(
+      { threadId: thread.id, messageId: m1.id },
+      ctx,
+    ).catch((e: unknown) => e);
+    expect(rejection).toBeInstanceOf(UnrecoverableError);
+    expect((rejection as Error).message).toBe("AiRefusalError");
+  });
+
+  it("sanitizes unknown errors before they reach BullMQ", async () => {
+    const { db } = handle;
+    const { thread, m1 } = await seed();
+    const ai = createFakeAiProvider({
+      error: new Error('Failed query: insert into "thread_insights" params: secret subject'),
+    });
+    const rejection = await classifyThreadHandler({ db, encryptor, ai, logger })(
+      { threadId: thread.id, messageId: m1.id },
+      ctx,
+    ).catch((e: unknown) => e);
+    // The handler maps a non-AI provider error to an UnrecoverableError named after the error.
+    expect(rejection).toBeInstanceOf(Error);
+    const text = `${(rejection as Error).message}\n${(rejection as Error).stack}`;
+    expect(text).not.toContain("secret subject");
+  });
+
+  it("sanitizes errors thrown outside the provider call", async () => {
+    const { db } = handle;
+    const { thread, m1 } = await seed();
+    const wrongKeyEncryptor = createEncryptor(
+      LocalKeyProvider.fromEnv(`v1:${Buffer.alloc(32, 9).toString("base64")}`),
+    );
+    const ai = createFakeAiProvider();
+    const rejection = await classifyThreadHandler({
+      db,
+      encryptor: wrongKeyEncryptor,
+      ai,
+      logger,
+    })({ threadId: thread.id, messageId: m1.id }, ctx).catch((e: unknown) => e);
+    expect(rejection).toBeInstanceOf(Error);
+    expect(ai.calls).toHaveLength(0);
+    expect((rejection as Error).message).not.toContain("secret");
+  });
+
+  it("swallows an onUsage failure and still classifies", async () => {
+    const { db } = handle;
+    const { thread, m1 } = await seed();
+    const lines: string[] = [];
+    const capture = createLogger({ name: "test" }, { write: (l: string) => void lines.push(l) });
+    const ai = createFakeAiProvider();
+    // A CHECK that always fails makes every new usage row violate it (existing rows are not scanned).
+    await db.execute(
+      sql`alter table ai_usage_events add constraint t6_fail check (false) not valid`,
+    );
+    try {
+      await classifyThreadHandler({ db, encryptor, ai, logger: capture })(
+        { threadId: thread.id, messageId: m1.id },
+        ctx,
+      );
+    } finally {
+      await db.execute(sql`alter table ai_usage_events drop constraint t6_fail`);
+    }
+    expect(await getThreadInsight(db, thread.id)).toMatchObject({
+      classifiedThroughMessageId: m1.id,
+    });
+    expect(lines.join("")).toContain("ai usage not recorded");
+  });
+
+  it("skips a job whose messageId is not the newest message", async () => {
+    const { db } = handle;
+    const { account, thread, m1 } = await seed();
+    await insertMessage(db, thread.id, account.id, {
+      fromAddress: { name: "Client", address: "client@example.com" },
+      sentAt: new Date(Date.now() - HOUR_MS),
+    });
+    const ai = createFakeAiProvider();
+    await classifyThreadHandler({ db, encryptor, ai, logger })(
+      { threadId: thread.id, messageId: m1.id },
+      ctx,
+    );
+    expect(ai.calls).toHaveLength(0);
   });
 });
