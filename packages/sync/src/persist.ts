@@ -20,7 +20,10 @@ export interface PersistAccount {
   emailAddress: string;
 }
 
-/** Writes parsed threads (inside the caller's transaction). Threads without messages are deleted. */
+/**
+ * Writes parsed threads (inside the caller's transaction). Draft messages are dropped; threads
+ * left without messages are deleted.
+ */
 export async function persistThreads(
   tx: DbExecutor,
   encryptor: Encryptor,
@@ -31,7 +34,12 @@ export async function persistThreads(
   const expiresAt = new Date(now.getTime() + (await getBodyCacheDays(tx, account.userId)) * DAY_MS);
   const owner = account.emailAddress.toLowerCase();
 
-  for (const thread of parsed) {
+  for (const fetched of parsed) {
+    // Gmail returns unsent drafts inside threads; they are not mail and must not be stored.
+    const thread = {
+      ...fetched,
+      messages: fetched.messages.filter((m) => !m.labelIds.includes("DRAFT")),
+    };
     if (thread.messages.length === 0) {
       await deleteThreadsByProviderIds(tx, account.id, [thread.providerThreadId]);
       continue;
