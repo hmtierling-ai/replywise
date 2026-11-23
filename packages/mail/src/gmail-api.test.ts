@@ -159,12 +159,70 @@ describe("createGmailApi", () => {
       );
     });
 
-    it("retries a rate-limited 403 with exponential backoff", async () => {
+    it("retries a rate-limited 403 with a 5/10/20/40 s backoff", async () => {
       const clock = fakeClock();
-      const { fetchImpl } = fakeFetch([rateLimited, threadOk]);
-      const api = createGmailApi("tok", { fetch: fetchImpl, unitsPerSecond: 1000, ...clock });
+      const { fetchImpl } = fakeFetch([rateLimited, rateLimited, rateLimited, rateLimited, threadOk]);
+      const api = createGmailApi("tok", {
+        fetch: fetchImpl,
+        unitsPerSecond: 1000,
+        random: () => 0.5,
+        ...clock,
+      });
       expect((await api.getThread("t1"))?.providerThreadId).toBe("t1");
-      expect(clock.sleeps.filter((ms) => ms >= 1000)).toEqual([2000]);
+      expect(clock.sleeps.filter((ms) => ms >= 1000)).toEqual([5000, 10000, 20000, 40000]);
+    });
+
+    it("applies up to ±20% jitter to the backoff", async () => {
+      for (const [random, expected] of [
+        [0, 4000],
+        [1, 6000],
+      ] as const) {
+        const clock = fakeClock();
+        const { fetchImpl } = fakeFetch([rateLimited, threadOk]);
+        const api = createGmailApi("tok", {
+          fetch: fetchImpl,
+          unitsPerSecond: 1000,
+          random: () => random,
+          ...clock,
+        });
+        await api.getThread("t1");
+        expect(clock.sleeps.filter((ms) => ms >= 1000)).toEqual([expected]);
+      }
+    });
+
+    it("pauses every lane during a rate-limit backoff", async () => {
+      let t = 0;
+      let startedSecond = false;
+      let second: Promise<unknown> | undefined;
+      const fetchTimes: Record<string, number> = {};
+      const fetchImpl: FetchLike = async (url) => {
+        const id = new URL(url).pathname.split("/").at(-1) ?? "";
+        if (id === "a" && fetchTimes.a === undefined) {
+          fetchTimes.a = t;
+          return new Response(JSON.stringify(rateLimited.body), { status: 429 });
+        }
+        fetchTimes[id] ??= t;
+        return new Response(JSON.stringify({ id, messages: [] }));
+      };
+      const api = createGmailApi("tok", {
+        fetch: fetchImpl,
+        unitsPerSecond: 1000,
+        random: () => 0.5,
+        now: () => t,
+        sleep: async (ms) => {
+          // A concurrent call starts while call "a" is backing off.
+          const wake = t + ms;
+          if (ms >= 1000 && !startedSecond) {
+            startedSecond = true;
+            second = api.getThread("b");
+          }
+          await Promise.resolve();
+          t = Math.max(t, wake);
+        },
+      });
+      await api.getThread("a");
+      await second;
+      expect(fetchTimes.b).toBeGreaterThanOrEqual(5000);
     });
 
     it("honours Retry-After on a 429", async () => {

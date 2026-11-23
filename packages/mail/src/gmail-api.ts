@@ -51,6 +51,8 @@ export interface GmailApiOptions {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   maxRetries?: number;
+  /** Source of jitter for rate-limit backoff, in [0, 1) (default Math.random; tests inject). */
+  random?: () => number;
 }
 
 /**
@@ -61,6 +63,9 @@ export interface GmailApiOptions {
 export const GMAIL_COST = { profile: 10, listThreads: 100, getThread: 120, listHistory: 20 };
 
 const MAX_BACKOFF_MS = 60_000;
+/** Rate-limit backoff per attempt; sums to 75 s so a full retry run outlasts the 60 s quota window. */
+const BACKOFF_MS = [5_000, 10_000, 20_000, 40_000];
+const JITTER = 0.2;
 
 export function createGmailApi(accessToken: string, options: GmailApiOptions = {}): GmailApi {
   const fetchImpl: FetchLike = options.fetch ?? ((url, init) => fetch(url, init));
@@ -68,7 +73,17 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = options.now ?? (() => Date.now());
   const maxRetries = options.maxRetries ?? 4;
+  const random = options.random ?? Math.random;
   let nextFree = 0;
+
+  function backoffMs(error: ProviderHttpError, attempt: number): number {
+    if (error.retryAfterMs !== undefined) {
+      return Math.min(error.retryAfterMs, MAX_BACKOFF_MS);
+    }
+    const base = BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)] ?? MAX_BACKOFF_MS;
+    const jitter = 1 + (random() * 2 - 1) * JITTER;
+    return Math.min(Math.round(base * jitter), MAX_BACKOFF_MS);
+  }
 
   async function reserve(cost: number): Promise<void> {
     // Bookkeeping is synchronous so concurrent callers get distinct slots.
@@ -87,7 +102,9 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
         if (!(error instanceof ProviderHttpError) || !error.rateLimited || attempt >= maxRetries) {
           throw error;
         }
-        await sleep(Math.min(error.retryAfterMs ?? 2000 * 2 ** attempt, MAX_BACKOFF_MS));
+        // Push the shared pacer forward so every lane (not just this one) waits out the backoff;
+        // the retry's own reserve() then sleeps until the pause is over.
+        nextFree = Math.max(nextFree, now() + backoffMs(error, attempt));
       }
     }
   }
