@@ -133,6 +133,41 @@ describe("syncMailbox — backfill", () => {
     expect(outcome).toMatchObject({ status: "synced", threads: 3 });
     expect(await db.select().from(threads)).toHaveLength(3);
   });
+
+  it("marks messages carrying the SENT label as from the user (send-as aliases)", async () => {
+    const { base, mailAccountId } = await connectedGmail();
+    const gmail = createFakeGmail({
+      threads: {
+        t1: [
+          fakeMessage({
+            providerMessageId: "m1",
+            providerThreadId: "t1",
+            from: { name: null, address: "client@example.com" },
+            labelIds: ["INBOX"],
+            sentAt: new Date("2026-11-15T00:00:00Z"),
+          }),
+          fakeMessage({
+            providerMessageId: "m2",
+            providerThreadId: "t1",
+            from: { name: null, address: "alias@company.com" },
+            labelIds: ["SENT"],
+            sentAt: new Date("2026-11-16T00:00:00Z"),
+          }),
+        ],
+      },
+    });
+
+    await syncMailbox(syncDeps(base, gmail), mailAccountId);
+
+    const stored = await db
+      .select({ id: messages.providerMessageId, isFromUser: messages.isFromUser })
+      .from(messages)
+      .orderBy(messages.sentAt);
+    expect(stored).toEqual([
+      { id: "m1", isFromUser: false },
+      { id: "m2", isFromUser: true },
+    ]);
+  });
 });
 
 describe("syncMailbox — incremental", () => {

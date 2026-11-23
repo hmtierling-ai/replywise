@@ -55,7 +55,8 @@ export async function persistThreads(
         subject: message.subject,
         snippet: message.snippet,
         sentAt: message.sentAt,
-        isFromUser: message.from.address === owner,
+        // SENT covers send-as aliases; the address check covers providers/tests without labels.
+        isFromUser: message.labelIds.includes("SENT") || message.from.address === owner,
         hasAttachments: message.hasAttachments,
       });
       // Always cache, even an empty body, so bodiless messages are not refetched on every view.
