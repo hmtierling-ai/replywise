@@ -1,3 +1,4 @@
+import { type AiProvider, createAnthropicProvider } from "@replywise/ai";
 import type { WorkerEnv } from "@replywise/config";
 import { createDb } from "@replywise/db";
 import type { GmailApiFactory } from "@replywise/mail";
@@ -5,6 +6,8 @@ import type { Logger } from "@replywise/observability";
 import { createJobQueue, createJobWorker, createRedisConnection } from "@replywise/queue";
 import type { Worker } from "bullmq";
 import { buildSyncDeps } from "./deps";
+import { classifyThreadHandler } from "./jobs/classify-thread";
+import { enqueueClassificationsHandler } from "./jobs/enqueue-classifications";
 import { purgeBodiesHandler } from "./jobs/purge-bodies";
 import { purgeOAuthStatesHandler } from "./jobs/purge-oauth-states";
 import { reconcileSyncSchedulesHandler } from "./jobs/reconcile-sync-schedules";
@@ -14,22 +17,26 @@ import { safeErrorFields } from "./log-error";
 export const PURGE_BODIES_SCHEDULER_ID = "maintenance.purgeBodies:hourly";
 export const PURGE_OAUTH_STATES_SCHEDULER_ID = "maintenance.purgeOAuthStates:hourly";
 export const RECONCILE_SCHEDULER_ID = "maintenance.reconcileSyncSchedules:minutely";
+export const ENQUEUE_CLASSIFICATIONS_SCHEDULER_ID = "maintenance.enqueueClassifications:minutely";
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_MINUTE_MS = 60 * 1000;
 const SYNC_CONCURRENCY = 4;
+const AI_CONCURRENCY = 2;
 
 export async function startWorker(
   env: WorkerEnv,
   logger: Logger,
-  options: { queuePrefix?: string; gmail?: GmailApiFactory } = {},
+  options: { queuePrefix?: string; gmail?: GmailApiFactory; ai?: AiProvider } = {},
 ) {
   const { db, close: closeDb } = createDb(env.DATABASE_URL);
   const queueConnection = createRedisConnection(env.REDIS_URL);
   const maintenanceConnection = createRedisConnection(env.REDIS_URL);
   const syncConnection = createRedisConnection(env.REDIS_URL);
+  const aiConnection = createRedisConnection(env.REDIS_URL);
   const prefix = options.queuePrefix ? { prefix: options.queuePrefix } : {};
   const queue = createJobQueue(queueConnection, prefix);
   const syncDeps = buildSyncDeps(env, db, options.gmail);
+  const ai = options.ai ?? createAnthropicProvider();
 
   const maintenanceWorker = createJobWorker(
     "maintenance",
@@ -38,6 +45,7 @@ export async function startWorker(
       "maintenance.purgeBodies": purgeBodiesHandler({ db, logger }),
       "maintenance.purgeOAuthStates": purgeOAuthStatesHandler({ db, logger }),
       "maintenance.reconcileSyncSchedules": reconcileSyncSchedulesHandler({ db, queue, logger }),
+      "maintenance.enqueueClassifications": enqueueClassificationsHandler({ db, queue, logger }),
     },
     { concurrency: 1, ...prefix },
   );
@@ -47,7 +55,15 @@ export async function startWorker(
     { "mailbox.sync": syncMailboxHandler({ syncDeps, logger }) },
     { concurrency: SYNC_CONCURRENCY, ...prefix },
   );
-  for (const worker of [maintenanceWorker, syncWorker] as Worker[]) {
+  const aiWorker = createJobWorker(
+    "ai",
+    aiConnection,
+    {
+      "thread.classify": classifyThreadHandler({ db, encryptor: syncDeps.encryptor, ai, logger }),
+    },
+    { concurrency: AI_CONCURRENCY, ...prefix },
+  );
+  for (const worker of [maintenanceWorker, syncWorker, aiWorker] as Worker[]) {
     worker.on("failed", (job, error) => {
       logger.error(
         { jobId: job?.id, jobName: job?.name, error: safeErrorFields(error) },
@@ -74,16 +90,23 @@ export async function startWorker(
     {},
     ONE_MINUTE_MS,
   );
+  await queue.scheduleRepeating(
+    ENQUEUE_CLASSIFICATIONS_SCHEDULER_ID,
+    "maintenance.enqueueClassifications",
+    {},
+    ONE_MINUTE_MS,
+  );
   logger.info("worker started");
 
   return {
     async stop(): Promise<void> {
-      await Promise.all([maintenanceWorker.close(), syncWorker.close()]);
+      await Promise.all([maintenanceWorker.close(), syncWorker.close(), aiWorker.close()]);
       await queue.close();
       await Promise.all([
         queueConnection.quit(),
         maintenanceConnection.quit(),
         syncConnection.quit(),
+        aiConnection.quit(),
       ]);
       await closeDb();
       logger.info("worker stopped");

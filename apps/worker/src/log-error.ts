@@ -1,3 +1,4 @@
+import { AiError } from "@replywise/ai";
 import { OAuthError, ProviderHttpError } from "@replywise/mail";
 
 export interface SafeErrorFields {
@@ -13,7 +14,11 @@ export interface SafeErrorFields {
  * SQLSTATE from `cause.code`. Never returns `.message` or `.stack` of an unknown error.
  */
 export function safeErrorFields(error: unknown): SafeErrorFields {
-  if (error instanceof ProviderHttpError || error instanceof OAuthError) {
+  if (
+    error instanceof ProviderHttpError ||
+    error instanceof OAuthError ||
+    error instanceof AiError
+  ) {
     return { name: error.name, message: error.message };
   }
   const name = error instanceof Error ? error.name : typeof error;
@@ -28,7 +33,13 @@ export function safeErrorFields(error: unknown): SafeErrorFields {
  * error carrying only the safe fields, so query parameters never reach Redis.
  */
 export function sanitizeError(error: unknown): Error {
-  if (error instanceof ProviderHttpError || error instanceof OAuthError) return error;
+  if (
+    error instanceof ProviderHttpError ||
+    error instanceof OAuthError ||
+    error instanceof AiError
+  ) {
+    return error;
+  }
   const { name, code } = safeErrorFields(error);
   const safe = new Error(code ? `${name} (${code})` : name);
   safe.name = name;

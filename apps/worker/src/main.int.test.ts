@@ -22,6 +22,7 @@ import { purgeOAuthStatesHandler } from "./jobs/purge-oauth-states";
 import { reconcileSyncSchedulesHandler } from "./jobs/reconcile-sync-schedules";
 import { syncMailboxHandler } from "./jobs/sync-mailbox";
 import {
+  ENQUEUE_CLASSIFICATIONS_SCHEDULER_ID,
   PURGE_BODIES_SCHEDULER_ID,
   PURGE_OAUTH_STATES_SCHEDULER_ID,
   RECONCILE_SCHEDULER_ID,
@@ -169,6 +170,7 @@ describe("startWorker", () => {
       expect(ids).toContain(PURGE_BODIES_SCHEDULER_ID);
       expect(ids).toContain(PURGE_OAUTH_STATES_SCHEDULER_ID);
       expect(ids).toContain(RECONCILE_SCHEDULER_ID);
+      expect(ids).toContain(ENQUEUE_CLASSIFICATIONS_SCHEDULER_ID);
     } finally {
       await inspector.close();
       await connection.quit();

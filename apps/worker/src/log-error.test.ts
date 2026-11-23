@@ -1,3 +1,4 @@
+import { AiRateLimitedError } from "@replywise/ai";
 import { OAuthError, ProviderHttpError } from "@replywise/mail";
 import { describe, expect, it } from "vitest";
 import { safeErrorFields, sanitizeError } from "./log-error";
@@ -41,6 +42,15 @@ describe("safeErrorFields", () => {
     expect(safeErrorFields(new OAuthError("invalid_grant", 400, "secret description"))).toEqual({
       name: "OAuthError",
       message: "invalid_grant",
+    });
+  });
+});
+
+describe("safeErrorFields (AI)", () => {
+  it("keeps the fixed message of AI errors", () => {
+    expect(safeErrorFields(new AiRateLimitedError())).toEqual({
+      name: "AiRateLimitedError",
+      message: "AI provider rate limit reached",
     });
   });
 });

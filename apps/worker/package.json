@@ -12,7 +12,9 @@
     "test:int": "vitest run -c vitest.int.config.ts"
   },
   "dependencies": {
+    "@replywise/ai": "workspace:*",
     "@replywise/config": "workspace:*",
+    "@replywise/core": "workspace:*",
     "@replywise/crypto": "workspace:*",
     "@replywise/db": "workspace:*",
     "@replywise/mail": "workspace:*",
