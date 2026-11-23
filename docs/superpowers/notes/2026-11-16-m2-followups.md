@@ -57,3 +57,15 @@ The final whole-branch review verdict was "ready to merge with fixes"; the fixes
   `prompt=consent`; add `@replywise/mailbox` to the spec §3 package table.
 - Playwright `reuseExistingServer` can test a stale local server on :3000.
 - Commit co-author trailers are inconsistent across M2 commits (Opus 5.5 vs Haiku 5.5).
+
+## M4 decisions to revisit
+
+- Classification is enqueued by a minutely worker scan (`maintenance.enqueueClassifications`) instead of by the sync job; it also covers keys added later and keeps Redis out of the web app. Latency: up to ~1 minute after sync.
+- Category = deriveCategory(urgency, importance, needs_reply) with fixed thresholds (urgency ≥ 4 → Urgent, importance ≥ 4 → Important, needs_reply → Needs Reply, importance ≥ 2 → Informational, else Low Priority); tune with real data.
+- Window: only inbox threads whose last message is within 7 days are classified (user decision 2026-11-23). Older threads stay unclassified unless new mail arrives.
+- A thread whose classification fails permanently keeps its failed job id (`classify_<thread>_<message>`) and is not retried until a new message arrives. The scan limit (200 per minute) could be filled by such threads in very large inboxes.
+- No per-user AI enqueue rate limit yet (M6 hardening).
+- isFromUser now uses Gmail's SENT label (send-as aliases) — done in M4.
+- `@anthropic-ai/sdk` is pinned to 1.12.0 to respect pnpm's release-age gate; upgrade once newer releases age past it.
+- Classify job ids include the AI key version (`classify_<thread>_<message>_<keyVersionMs>`), so re-saving a rejected key re-enqueues pending threads immediately; the job payload carries `messageId` and skips when a newer message exists.
+- Usage is recorded before output validation (the adapter calls `create`, not `parse`), and a failed usage write never changes the classification result.

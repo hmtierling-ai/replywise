@@ -80,3 +80,16 @@ pnpm --filter @replywise/web dev      # terminal 2
 
 Message bodies are cached encrypted for `body_cache_days` (default 14) and refetched on demand
 when you open an older thread. Replywise only reads mail; it never sends.
+
+## AI classification
+
+Add your own Anthropic API key in **Settings → AI**. Replywise checks it against the Anthropic API, stores it encrypted, and shows only its last four characters.
+
+The worker scans every minute for inbox threads whose newest message arrived in the last 7 days and isn't yours. It classifies each one once per new message with your key: urgency and importance from 1 to 5, whether it needs a reply, and up to three plain-text reasons. The thread then appears under Urgent, Important, Needs Reply, Informational or Low Priority.
+
+- Default model: Claude Opus 5.5 (low effort). Claude Haiku 5.5 is available in Settings for much lower cost.
+- Usage per task and model, with an estimate, is shown in Settings → AI.
+- A rejected key pauses classification until you replace it.
+- Email content is sent to Anthropic only for classification, as untrusted data with no tools; Replywise never sends email.
+
+The worker needs no extra environment variables; keys are per user.
