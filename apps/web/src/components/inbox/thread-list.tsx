@@ -6,7 +6,7 @@ import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { formatParticipants, formatThreadTime } from "@/lib/inbox-format";
+import { emptyInboxState, formatParticipants, formatThreadTime } from "@/lib/inbox-format";
 import { cn } from "@/lib/utils";
 
 /** Reads the session and DB; render inside <Suspense>. */
@@ -31,16 +31,16 @@ export async function ThreadList() {
 
   const threads = await listInboxThreads(db, user.id);
   if (threads.length === 0) {
-    const syncing = mailboxes.some((m) => m.status === "active" && m.lastSyncedAt === null);
-    if (syncing) {
+    const state = emptyInboxState(mailboxes);
+    if (state === "syncing") {
       return (
         <EmptyInbox
           title="Syncing your inbox…"
-          description="Replywise is bringing in the last 30 days of mail. This usually takes a minute or two."
+          description="Replywise is bringing in the last 30 days of mail. This usually takes a few minutes."
         />
       );
     }
-    if (mailboxes.some((m) => m.status !== "active")) {
+    if (state === "needs_attention") {
       return (
         <EmptyInbox
           title="Your mailbox needs attention"

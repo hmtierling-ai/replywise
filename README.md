@@ -67,7 +67,9 @@ Restart the dev server after editing `.env`, then open **Settings → Mailboxes*
 
 The worker syncs every active Gmail mailbox: the last 30 days of inbox threads on the first run,
 then changes every 2 minutes (schedules are reconciled once a minute, so a new mailbox starts
-within about a minute of connecting).
+within about a minute of connecting). Gmail calls are paced by quota cost (`GMAIL_COST`, about
+90 units/s against Gmail's 6000 units/min per-user limit; a full thread fetch costs ~120), so the
+first sync of a large inbox takes several minutes; threads appear in batches as they are saved.
 
 ```bash
 docker compose up -d --wait

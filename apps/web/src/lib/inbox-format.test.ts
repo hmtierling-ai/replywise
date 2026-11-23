@@ -1,5 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { formatParticipants, formatSyncStatus, formatThreadTime } from "./inbox-format";
+import {
+  emptyInboxState,
+  formatParticipants,
+  formatSyncStatus,
+  formatThreadTime,
+} from "./inbox-format";
+
+describe("emptyInboxState", () => {
+  const mailbox = (overrides: Partial<Parameters<typeof emptyInboxState>[0][number]> = {}) => ({
+    status: "active" as const,
+    lastSyncedAt: null,
+    lastError: null,
+    ...overrides,
+  });
+
+  it("is syncing while an active mailbox has not finished its first sync", () => {
+    expect(emptyInboxState([mailbox()])).toBe("syncing");
+  });
+
+  it("needs attention when the first sync failed, instead of syncing forever", () => {
+    expect(emptyInboxState([mailbox({ lastError: "Gmail API request failed (500)" })])).toBe(
+      "needs_attention",
+    );
+  });
+
+  it("needs attention when a mailbox is not active", () => {
+    expect(emptyInboxState([mailbox({ status: "needs_reauth", lastError: "x" })])).toBe(
+      "needs_attention",
+    );
+  });
+
+  it("is caught up when every mailbox has synced", () => {
+    expect(emptyInboxState([mailbox({ lastSyncedAt: new Date() })])).toBe("caught_up");
+  });
+});
 
 describe("formatParticipants", () => {
   it("names other people first, falls back to addresses, and summarises extras", () => {

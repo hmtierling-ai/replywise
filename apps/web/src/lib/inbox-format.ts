@@ -26,6 +26,27 @@ export function formatThreadTime(date: Date, now: Date, timeZone?: string): stri
   });
 }
 
+export type EmptyInboxState = "syncing" | "needs_attention" | "caught_up";
+
+interface MailboxSyncState {
+  status: "active" | "needs_reauth" | "error";
+  lastSyncedAt: Date | null;
+  lastError: string | null;
+}
+
+/**
+ * Which empty state an inbox with no threads shows. A first sync that failed (no lastSyncedAt
+ * but a lastError) is not "syncing": it needs attention, or the page would spin forever.
+ */
+export function emptyInboxState(mailboxes: MailboxSyncState[]): EmptyInboxState {
+  const firstSyncFailed = (m: MailboxSyncState) => m.lastSyncedAt === null && m.lastError !== null;
+  const syncing = (m: MailboxSyncState) =>
+    m.status === "active" && m.lastSyncedAt === null && !firstSyncFailed(m);
+  if (mailboxes.some(syncing)) return "syncing";
+  if (mailboxes.some((m) => m.status !== "active" || firstSyncFailed(m))) return "needs_attention";
+  return "caught_up";
+}
+
 export function formatSyncStatus(
   account: {
     status: "active" | "needs_reauth" | "error";
