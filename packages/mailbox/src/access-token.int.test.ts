@@ -63,6 +63,20 @@ describe("getValidAccessToken", () => {
     expect(fake.calls.refresh).toBe(1);
   });
 
+  it("refreshes earlier when the caller asks for a longer minimum validity", async () => {
+    const { fake, at, mailAccountId } = await connected();
+    const sevenMinutesLeft = at(new Date(T0.getTime() + 53 * MIN));
+    expect((await getValidAccessToken(sevenMinutesLeft, mailAccountId)).accessToken).toBe(
+      "access-1",
+    );
+    expect(fake.calls.refresh).toBe(0);
+    const result = await getValidAccessToken(sevenMinutesLeft, mailAccountId, {
+      minValidityMs: 15 * MIN,
+    });
+    expect(result.accessToken).toBe("access-2");
+    expect(fake.calls.refresh).toBe(1);
+  });
+
   it("serializes concurrent refreshes with a row lock", async () => {
     const { fake, at, mailAccountId } = await connected({ refreshDelayMs: 150 });
     const nearExpiry = at(new Date(T0.getTime() + 58 * MIN));

@@ -11,12 +11,18 @@ const REAUTH_MESSAGE = "Access was revoked or expired. Reconnect this mailbox.";
 
 type Outcome = { accessToken: string; provider: MailProviderId } | { reauth: true };
 
-function isFresh(expiresAt: string, now: Date): boolean {
-  return new Date(expiresAt).getTime() - REFRESH_SKEW_MS > now.getTime();
+export interface AccessTokenOptions {
+  /** Refresh unless the token stays valid at least this long (default REFRESH_SKEW_MS). */
+  minValidityMs?: number;
+}
+
+function isFresh(expiresAt: string, now: Date, minValidityMs: number): boolean {
+  return new Date(expiresAt).getTime() - minValidityMs > now.getTime();
 }
 
 /**
- * Returns a usable access token, refreshing it when it expires within 5 minutes.
+ * Returns a usable access token, refreshing it when it expires within 5 minutes (or within
+ * `options.minValidityMs`, for long-running callers such as sync).
  * Fresh tokens are read without locking. Refreshes run under a row lock (SELECT … FOR UPDATE)
  * and re-check freshness after acquiring it, so concurrent callers never refresh twice —
  * important for Microsoft, which rotates refresh tokens. A successful refresh never changes
@@ -28,7 +34,9 @@ function isFresh(expiresAt: string, now: Date): boolean {
 export async function getValidAccessToken(
   deps: MailboxDeps,
   mailAccountId: string,
+  options: AccessTokenOptions = {},
 ): Promise<{ accessToken: string; provider: MailProviderId }> {
+  const minValidityMs = options.minValidityMs ?? REFRESH_SKEW_MS;
   const [current] = await deps.db
     .select({
       id: mailAccounts.id,
@@ -41,7 +49,7 @@ export async function getValidAccessToken(
   if (!current) throw new MailAccountNotFoundError(mailAccountId);
   if (current.status === "needs_reauth") throw new ReauthRequiredError(mailAccountId);
   const stored = await decryptTokens(deps.encryptor, current.id, current.tokensCiphertext);
-  if (isFresh(stored.expiresAt, clock(deps))) {
+  if (isFresh(stored.expiresAt, clock(deps), minValidityMs)) {
     return { accessToken: stored.accessToken, provider: current.provider };
   }
 
@@ -56,7 +64,7 @@ export async function getValidAccessToken(
 
     const now = clock(deps);
     const tokens = await decryptTokens(deps.encryptor, account.id, account.tokensCiphertext);
-    if (isFresh(tokens.expiresAt, now)) {
+    if (isFresh(tokens.expiresAt, now, minValidityMs)) {
       return { accessToken: tokens.accessToken, provider: account.provider };
     }
 
