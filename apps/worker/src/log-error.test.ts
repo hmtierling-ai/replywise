@@ -1,6 +1,6 @@
 import { OAuthError, ProviderHttpError } from "@replywise/mail";
 import { describe, expect, it } from "vitest";
-import { safeErrorFields } from "./log-error";
+import { safeErrorFields, sanitizeError } from "./log-error";
 
 class FakeDrizzleQueryError extends Error {
   constructor(cause: unknown) {
@@ -42,5 +42,24 @@ describe("safeErrorFields", () => {
       name: "OAuthError",
       message: "invalid_grant",
     });
+  });
+});
+
+describe("sanitizeError", () => {
+  it("replaces a query error with one carrying only its name and SQLSTATE", () => {
+    const safe = sanitizeError(
+      new FakeDrizzleQueryError(Object.assign(new Error("secret subject"), { code: "40P01" })),
+    );
+    expect(safe.name).toBe("DrizzleQueryError");
+    expect(safe.message).toBe("DrizzleQueryError (40P01)");
+    expect(`${safe.message}\n${safe.stack}`).not.toContain("secret subject");
+    expect(`${safe.message}\n${safe.stack}`).not.toContain("ada@x.com");
+  });
+
+  it("passes provider and OAuth errors through unchanged", () => {
+    const provider = new ProviderHttpError(403, "/gmail/v1/users/me/profile");
+    const oauth = new OAuthError("invalid_grant", 400);
+    expect(sanitizeError(provider)).toBe(provider);
+    expect(sanitizeError(oauth)).toBe(oauth);
   });
 });
