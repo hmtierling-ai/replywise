@@ -26,6 +26,10 @@ export function formatThreadTime(date: Date, now: Date, timeZone?: string): stri
   });
 }
 
+export function formatScores(urgency: number, importance: number): string {
+  return `Urgency ${urgency}/5 · Importance ${importance}/5`;
+}
+
 export type EmptyInboxState = "syncing" | "needs_attention" | "caught_up";
 
 interface MailboxSyncState {

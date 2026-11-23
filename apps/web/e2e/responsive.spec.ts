@@ -7,5 +7,5 @@ test("mobile users navigate through the sheet menu", async ({ page }) => {
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("link", { name: "Needs Reply" }).click();
   await expect(page).toHaveURL(/\/inbox\/needs-reply$/);
-  await expect(page.getByRole("heading", { name: "Nothing in Needs Reply" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No mailboxes connected" })).toBeVisible();
 });

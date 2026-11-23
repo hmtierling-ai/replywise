@@ -1,14 +1,24 @@
+import type { ThreadInsight } from "@replywise/db";
 import type { ThreadView as ThreadViewData } from "@replywise/sync";
 import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { LocalTime } from "@/components/local-time";
+import { InsightPanel } from "@/components/thread/insight-panel";
 import { buildEmailDocument, gmailThreadUrl, sanitizeEmailHtml } from "@/lib/email-html";
 import { formatThreadTime } from "@/lib/inbox-format";
 import { EmailFrame } from "./email-frame";
 
 const name = (a: { name: string | null; address: string }) => a.name ?? a.address;
 
-export function ThreadView({ view, now }: { view: ThreadViewData; now: Date }) {
+export function ThreadView({
+  view,
+  insight,
+  now,
+}: {
+  view: ThreadViewData;
+  insight: ThreadInsight | null;
+  now: Date;
+}) {
   return (
     <article className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6">
       <Link href="/inbox" className="text-sm text-muted-foreground hover:text-foreground">
@@ -27,6 +37,7 @@ export function ThreadView({ view, now }: { view: ThreadViewData; now: Date }) {
           </a>
         ) : null}
       </header>
+      {insight ? <InsightPanel insight={insight} /> : null}
       {view.bodiesUnavailable ? (
         <p
           role="status"

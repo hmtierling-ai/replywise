@@ -1,9 +1,11 @@
+import { getThreadInsight } from "@replywise/db";
 import { loadThreadForUser } from "@replywise/sync";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { ThreadView } from "@/components/thread/thread-view";
 import { requireUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
 import { getSyncDeps } from "@/lib/sync";
 
 export const metadata = { title: "Thread" };
@@ -16,8 +18,9 @@ async function ThreadContent({ params }: { params: PageProps<"/thread/[id]">["pa
   if (!UUID.test(id)) notFound();
   const view = await loadThreadForUser(getSyncDeps(), user.id, id);
   if (!view) notFound();
+  const insight = await getThreadInsight(getDb(), view.id);
   await connection();
-  return <ThreadView view={view} now={new Date()} />;
+  return <ThreadView view={view} insight={insight} now={new Date()} />;
 }
 
 export default function ThreadPage({ params }: PageProps<"/thread/[id]">) {

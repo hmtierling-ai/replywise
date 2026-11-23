@@ -1,6 +1,15 @@
+import type { InboxCategory } from "@replywise/core";
 import { aad, createEncryptor, LocalKeyProvider } from "@replywise/crypto";
-import { aiCredentials, createDb, mailAccounts, messages, threads, users } from "@replywise/db";
-import { eq } from "drizzle-orm";
+import {
+  aiCredentials,
+  createDb,
+  mailAccounts,
+  messages,
+  threadInsights,
+  threads,
+  users,
+} from "@replywise/db";
+import { desc, eq } from "drizzle-orm";
 
 /** Direct DB seeding for e2e. Uses the same DATABASE_URL and LOCAL_KEKS as the server. */
 export async function withSeed<T>(
@@ -25,6 +34,16 @@ export async function withSeed<T>(
         at?: Date;
       },
     ) => Promise<string>;
+    insight: (
+      threadId: string,
+      input: {
+        category: InboxCategory;
+        reasons: string[];
+        urgency?: number;
+        importance?: number;
+        needsReply?: boolean;
+      },
+    ) => Promise<void>;
   }) => Promise<T>,
 ): Promise<T> {
   const url = process.env.DATABASE_URL;
@@ -107,6 +126,27 @@ export async function withSeed<T>(
             .where(eq(messages.id, message.id));
         }
         return thread.id;
+      },
+      async insight(threadId, input) {
+        const [latest] = await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(eq(messages.threadId, threadId))
+          .orderBy(desc(messages.sentAt))
+          .limit(1);
+        if (!latest) throw new Error(`no messages for thread ${threadId}`);
+        await db.insert(threadInsights).values({
+          threadId,
+          category: input.category,
+          urgency: input.urgency ?? 3,
+          importance: input.importance ?? 3,
+          needsReply: input.needsReply ?? false,
+          reasons: input.reasons,
+          classifiedThroughMessageId: latest.id,
+          aiProvider: "anthropic",
+          model: "claude-opus-5-5",
+          promptVersion: "classify-v1",
+        });
       },
     });
   } finally {

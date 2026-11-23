@@ -1,6 +1,8 @@
+import { CATEGORY_META, type InboxCategory } from "@replywise/core";
 import { listInboxThreads, listMailAccounts } from "@replywise/db";
 import Link from "next/link";
 import { connection } from "next/server";
+import { CategoryBadge } from "@/components/inbox/category-badge";
 import { EmptyInbox } from "@/components/inbox/empty-inbox";
 import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";
@@ -10,7 +12,7 @@ import { emptyInboxState, formatParticipants, formatThreadTime } from "@/lib/inb
 import { cn } from "@/lib/utils";
 
 /** Reads the session and DB; render inside <Suspense>. */
-export async function ThreadList() {
+export async function ThreadList({ category }: { category?: InboxCategory } = {}) {
   const user = await requireUser();
   await connection();
   const db = getDb();
@@ -19,7 +21,7 @@ export async function ThreadList() {
     return (
       <EmptyInbox
         title="No mailboxes connected"
-        description="Connect Gmail and Replywise will bring in your last 30 days of mail. Classification into Urgent, Important, Needs Reply, Informational and Low Priority arrives next."
+        description="Connect Gmail and Replywise will bring in your last 30 days of mail and sort it by what needs you."
         action={
           <Button asChild size="sm">
             <Link href="/settings/mailboxes">Connect a mailbox</Link>
@@ -29,7 +31,15 @@ export async function ThreadList() {
     );
   }
 
-  const threads = await listInboxThreads(db, user.id);
+  const threads = await listInboxThreads(db, user.id, category ? { category } : {});
+  if (threads.length === 0 && category) {
+    return (
+      <EmptyInbox
+        title={`Nothing in ${CATEGORY_META[category].label}`}
+        description={CATEGORY_META[category].description}
+      />
+    );
+  }
   if (threads.length === 0) {
     const state = emptyInboxState(mailboxes);
     if (state === "syncing") {
@@ -88,6 +98,7 @@ export async function ThreadList() {
               >
                 {formatParticipants(thread.participants, ownEmails)}
               </span>
+              {thread.category ? <CategoryBadge category={thread.category} /> : null}
               <LocalTime
                 iso={thread.lastMessageAt.toISOString()}
                 serverText={formatThreadTime(thread.lastMessageAt, now)}
@@ -106,6 +117,12 @@ export async function ThreadList() {
               ) : null}
             </p>
             <p className="truncate text-sm text-muted-foreground">{thread.snippet}</p>
+            {thread.reasons?.[0] ? (
+              <p className="truncate text-xs text-muted-foreground">
+                <span className="sr-only">Why: </span>
+                {thread.reasons[0]}
+              </p>
+            ) : null}
           </Link>
         </li>
       ))}

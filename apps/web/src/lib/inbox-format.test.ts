@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   emptyInboxState,
   formatParticipants,
+  formatScores,
   formatSyncStatus,
   formatThreadTime,
 } from "./inbox-format";
+
+it("formats urgency and importance scores", () => {
+  expect(formatScores(4, 2)).toBe("Urgency 4/5 · Importance 2/5");
+});
 
 describe("emptyInboxState", () => {
   const mailbox = (overrides: Partial<Parameters<typeof emptyInboxState>[0][number]> = {}) => ({
