@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CATEGORY_META, categoryFromSlug, INBOX_CATEGORIES } from "./categories";
+import { CATEGORY_META, categoryFromSlug, deriveCategory, INBOX_CATEGORIES } from "./categories";
 
 describe("inbox categories", () => {
   it("are listed in precedence order", () => {
@@ -28,5 +28,16 @@ describe("inbox categories", () => {
     expect(categoryFromSlug("spam")).toBeNull();
     expect(categoryFromSlug("needs_reply")).toBeNull();
     expect(categoryFromSlug("")).toBeNull();
+  });
+});
+
+describe("deriveCategory", () => {
+  it("applies the precedence Urgent > Important > Needs Reply > Informational > Low Priority", () => {
+    expect(deriveCategory({ urgency: 5, importance: 5, needsReply: true })).toBe("urgent");
+    expect(deriveCategory({ urgency: 4, importance: 1, needsReply: false })).toBe("urgent");
+    expect(deriveCategory({ urgency: 3, importance: 4, needsReply: true })).toBe("important");
+    expect(deriveCategory({ urgency: 3, importance: 3, needsReply: true })).toBe("needs_reply");
+    expect(deriveCategory({ urgency: 1, importance: 2, needsReply: false })).toBe("informational");
+    expect(deriveCategory({ urgency: 1, importance: 1, needsReply: false })).toBe("low_priority");
   });
 });
