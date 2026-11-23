@@ -9,6 +9,7 @@ import { purgeBodiesHandler } from "./jobs/purge-bodies";
 import { purgeOAuthStatesHandler } from "./jobs/purge-oauth-states";
 import { reconcileSyncSchedulesHandler } from "./jobs/reconcile-sync-schedules";
 import { syncMailboxHandler } from "./jobs/sync-mailbox";
+import { safeErrorFields } from "./log-error";
 
 export const PURGE_BODIES_SCHEDULER_ID = "maintenance.purgeBodies:hourly";
 export const PURGE_OAUTH_STATES_SCHEDULER_ID = "maintenance.purgeOAuthStates:hourly";
@@ -49,7 +50,7 @@ export async function startWorker(
   for (const worker of [maintenanceWorker, syncWorker] as Worker[]) {
     worker.on("failed", (job, error) => {
       logger.error(
-        { jobId: job?.id, jobName: job?.name, error: { name: error.name, message: error.message } },
+        { jobId: job?.id, jobName: job?.name, error: safeErrorFields(error) },
         "job failed",
       );
     });

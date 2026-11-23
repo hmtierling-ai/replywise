@@ -1,5 +1,6 @@
 import { createLogger } from "@replywise/observability";
 import { env } from "./env";
+import { safeErrorFields } from "./log-error";
 import { startWorker } from "./main";
 
 const logger = createLogger({ name: "worker", level: env.LOG_LEVEL });
@@ -14,10 +15,7 @@ async function shutdown(signal: string): Promise<void> {
     await worker.stop();
     process.exit(0);
   } catch (error) {
-    logger.error(
-      { error: error instanceof Error ? error.message : String(error) },
-      "shutdown failed",
-    );
+    logger.error({ error: safeErrorFields(error) }, "shutdown failed");
     process.exit(1);
   }
 }
