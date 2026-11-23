@@ -5,7 +5,9 @@ export type AuditAction =
   | "mailbox.connected"
   | "mailbox.reconnected"
   | "mailbox.disconnected"
-  | "mailbox.reauth_required";
+  | "mailbox.reauth_required"
+  | "ai_key.updated"
+  | "ai_key.deleted";
 
 export interface AuditEntry {
   userId: string;

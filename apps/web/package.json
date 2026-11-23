@@ -12,6 +12,7 @@
     "e2e": "dotenv -e ../../.env -- playwright test"
   },
   "dependencies": {
+    "@replywise/ai": "workspace:*",
     "@replywise/config": "workspace:*",
     "@replywise/core": "workspace:*",
     "@replywise/crypto": "workspace:*",

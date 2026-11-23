@@ -26,6 +26,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@replywise/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@replywise/config':
         specifier: workspace:*
         version: link:../../packages/config

@@ -1,10 +1,14 @@
 import { aad, createEncryptor, LocalKeyProvider } from "@replywise/crypto";
-import { createDb, mailAccounts, messages, threads, users } from "@replywise/db";
+import { aiCredentials, createDb, mailAccounts, messages, threads, users } from "@replywise/db";
 import { eq } from "drizzle-orm";
 
 /** Direct DB seeding for e2e. Uses the same DATABASE_URL and LOCAL_KEKS as the server. */
 export async function withSeed<T>(
   fn: (seed: {
+    aiKey: (
+      userEmail: string,
+      input?: { hint?: string; status?: "valid" | "invalid" },
+    ) => Promise<void>;
     mailbox: (
       userEmail: string,
       overrides?: Partial<typeof mailAccounts.$inferInsert>,
@@ -30,6 +34,21 @@ export async function withSeed<T>(
   const encryptor = createEncryptor(LocalKeyProvider.fromEnv(keks));
   try {
     return await fn({
+      async aiKey(userEmail, input) {
+        const [user] = await db.select().from(users).where(eq(users.email, userEmail));
+        if (!user) throw new Error(`no user ${userEmail}`);
+        await db.insert(aiCredentials).values({
+          userId: user.id,
+          provider: "anthropic",
+          keyCiphertext: await encryptor.encrypt(
+            `sk-ant-e2e-${"x".repeat(30)}`,
+            aad.aiCredential(user.id, "anthropic"),
+          ),
+          keyHint: input?.hint ?? "e2e1",
+          status: input?.status ?? "valid",
+          lastValidatedAt: new Date(),
+        });
+      },
       async mailbox(userEmail, overrides = {}) {
         const [user] = await db.select().from(users).where(eq(users.email, userEmail));
         if (!user) throw new Error(`no user ${userEmail}`);

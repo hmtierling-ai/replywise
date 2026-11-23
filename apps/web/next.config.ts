@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(process.cwd(), "../.."),
   transpilePackages: [
+    "@replywise/ai",
     "@replywise/core",
     "@replywise/config",
     "@replywise/crypto",
