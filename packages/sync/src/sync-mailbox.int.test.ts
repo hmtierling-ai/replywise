@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { decryptBody } from "./body-codec";
 import type { SyncDeps } from "./deps";
+import { SyncDeadlineError } from "./errors";
 import { syncMailbox } from "./sync-mailbox";
 import { createFakeGmail, fakeMessage } from "./testing";
 
@@ -38,8 +39,24 @@ async function connectedGmail(email = "me@gmail.com") {
     state,
     redirectUri: "http://cb",
   });
-  return { base, userId: user.id, mailAccountId, encryptor };
+  return { base, userId: user.id, mailAccountId, encryptor, provider };
 }
+
+async function accountRow(mailAccountId: string) {
+  const [account] = await db.select().from(mailAccounts).where(eq(mailAccounts.id, mailAccountId));
+  return account;
+}
+
+function seedThreads(count: number): Record<string, ReturnType<typeof fakeMessage>[]> {
+  const seeded: Record<string, ReturnType<typeof fakeMessage>[]> = {};
+  for (let i = 0; i < count; i++) {
+    seeded[`t${i}`] = [fakeMessage({ providerMessageId: `m${i}`, providerThreadId: `t${i}` })];
+  }
+  return seeded;
+}
+
+const storedThreadIds = async () =>
+  (await db.select().from(threads)).map((t) => t.providerThreadId).sort();
 
 function syncDeps(
   base: Omit<SyncDeps, "gmail">,
@@ -178,6 +195,144 @@ describe("syncMailbox — incremental", () => {
       .from(mailAccounts)
       .where(eq(mailAccounts.id, mailAccountId));
     expect(account?.syncCursor).toBe("900");
+  });
+});
+
+describe("syncMailbox — run bounds", () => {
+  it("re-backfills when history reports more changed threads than the cap", async () => {
+    const { base, mailAccountId } = await connectedGmail();
+    const gmail = createFakeGmail({ historyId: "100", threads: seedThreads(4) });
+    const deps = { ...syncDeps(base, gmail), maxBackfillThreads: 3 };
+    await syncMailbox(deps, mailAccountId);
+    gmail.history.push({
+      changedThreadIds: ["t0", "t1", "t2", "t3"],
+      deletedMessageIds: [],
+      historyId: "200",
+      nextPageToken: null,
+    });
+
+    expect(await syncMailbox(deps, mailAccountId)).toEqual({
+      status: "synced",
+      mode: "backfill",
+      threads: 3,
+    });
+    expect(gmail.calls.getThread).toHaveLength(6);
+  });
+
+  it("stops at the deadline, keeps committed batches and records a fixed error", async () => {
+    const { base, mailAccountId } = await connectedGmail();
+    let now = T0;
+    const gmail = createFakeGmail({
+      threads: seedThreads(5),
+      // Every thread fetch takes 5 minutes of (fake) wall time.
+      onGetThread: () => {
+        now = new Date(now.getTime() + 5 * 60_000);
+      },
+    });
+    const deps = { ...syncDeps(base, gmail), now: () => now, persistBatchSize: 2 };
+
+    await expect(syncMailbox(deps, mailAccountId)).rejects.toBeInstanceOf(SyncDeadlineError);
+    // Batch 1 (t0, t1) started before the 8-minute deadline; batch 2 never started a fetch.
+    expect(gmail.calls.getThread).toEqual(["t0", "t1"]);
+    expect(await storedThreadIds()).toEqual(["t0", "t1"]);
+    expect(await accountRow(mailAccountId)).toMatchObject({
+      lastError: "Sync is taking longer than expected; will continue on the next sync",
+      syncCursor: null,
+      syncLeaseUntil: null,
+    });
+  });
+
+  it("commits batches as it goes and writes the cursor only with the last one", async () => {
+    const { base, mailAccountId } = await connectedGmail();
+    const gmail = createFakeGmail({
+      historyId: "700",
+      threads: seedThreads(5),
+      onGetThread: (_id, call) => {
+        if (call === 4) throw new ProviderHttpError(500, "/gmail/v1/users/me/threads/t3");
+      },
+    });
+    const deps = { ...syncDeps(base, gmail), persistBatchSize: 2 };
+
+    await expect(syncMailbox(deps, mailAccountId)).rejects.toBeInstanceOf(ProviderHttpError);
+    expect(await storedThreadIds()).toEqual(["t0", "t1"]);
+    expect(await accountRow(mailAccountId)).toMatchObject({
+      syncCursor: null,
+      lastError: "Gmail API request failed (500)",
+    });
+
+    // The next run completes from scratch and saves the cursor.
+    const retry = createFakeGmail({ historyId: "700", threads: seedThreads(5) });
+    expect(await syncMailbox({ ...syncDeps(base, retry), persistBatchSize: 2 }, mailAccountId))
+      .toMatchObject({ status: "synced", threads: 5 });
+    expect(await storedThreadIds()).toEqual(["t0", "t1", "t2", "t3", "t4"]);
+    expect((await accountRow(mailAccountId))?.syncCursor).toBe("700");
+  });
+
+  it("asks for a token that stays valid for the whole run", async () => {
+    const { base, mailAccountId, provider } = await connectedGmail();
+    const gmail = createFakeGmail();
+    // Tokens last 60 minutes from T0; 7 minutes remain, inside the default 5-minute skew.
+    const later = new Date(T0.getTime() + 53 * 60_000);
+    await syncMailbox({ ...syncDeps(base, gmail), now: () => later }, mailAccountId);
+    expect(provider.calls.refresh).toBe(1);
+  });
+});
+
+describe("syncMailbox — drafts and pruning", () => {
+  it("does not store drafts; the thread summary comes from the real messages", async () => {
+    const { base, mailAccountId } = await connectedGmail();
+    const inboundAt = new Date("2026-11-15T00:00:00Z");
+    const gmail = createFakeGmail({
+      threads: {
+        t1: [
+          fakeMessage({
+            providerMessageId: "in",
+            providerThreadId: "t1",
+            snippet: "Inbound snippet",
+            sentAt: inboundAt,
+          }),
+          fakeMessage({
+            providerMessageId: "draft",
+            providerThreadId: "t1",
+            from: { name: "Me", address: "me@gmail.com" },
+            snippet: "Unsent draft",
+            sentAt: new Date("2026-11-16T00:00:00Z"),
+            labelIds: ["DRAFT"],
+          }),
+        ],
+        t2: [
+          fakeMessage({ providerMessageId: "only-draft", providerThreadId: "t2", labelIds: ["DRAFT"] }),
+        ],
+      },
+    });
+    await syncMailbox(syncDeps(base, gmail), mailAccountId);
+
+    expect((await db.select().from(messages)).map((m) => m.providerMessageId)).toEqual(["in"]);
+    const stored = await db.select().from(threads);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({
+      providerThreadId: "t1",
+      snippet: "Inbound snippet",
+      messageCount: 1,
+    });
+    expect(stored[0]?.lastMessageAt.getTime()).toBe(inboundAt.getTime());
+  });
+
+  it("prunes local threads a re-backfill no longer returns", async () => {
+    const { base, mailAccountId } = await connectedGmail();
+    const first = createFakeGmail({ historyId: "100", threads: seedThreads(2) });
+    await syncMailbox(syncDeps(base, first), mailAccountId);
+    expect(await storedThreadIds()).toEqual(["t0", "t1"]);
+
+    const expired = createFakeGmail({
+      historyId: "900",
+      historyExpired: true,
+      threads: { t1: [fakeMessage({ providerMessageId: "m1", providerThreadId: "t1" })] },
+    });
+    expect(await syncMailbox(syncDeps(base, expired), mailAccountId)).toMatchObject({
+      mode: "backfill",
+    });
+    expect(await storedThreadIds()).toEqual(["t1"]);
   });
 });
 

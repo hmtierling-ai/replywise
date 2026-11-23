@@ -29,6 +29,8 @@ export interface FakeGmailSeed {
   pageSize?: number;
   historyExpired?: boolean;
   failWith?: Error;
+  /** Runs before each getThread (1-based call number); throw to fail that call. */
+  onGetThread?: (threadId: string, call: number) => void;
 }
 
 /** In-memory Gmail double. Mutate `threads` / push to `history` between syncs. */
@@ -62,6 +64,7 @@ export function createFakeGmail(seed: FakeGmailSeed = {}) {
     async getThread(threadId) {
       fail();
       calls.getThread.push(threadId);
+      seed.onGetThread?.(threadId, calls.getThread.length);
       const messages = threads[threadId];
       return messages ? { providerThreadId: threadId, messages: [...messages] } : null;
     },

@@ -6,4 +6,6 @@ export interface SyncDeps extends MailboxDeps {
   gmail: GmailApiFactory;
   /** Overrides MAX_BACKFILL_THREADS (tests). */
   maxBackfillThreads?: number;
+  /** Overrides PERSIST_BATCH_SIZE (tests). */
+  persistBatchSize?: number;
 }

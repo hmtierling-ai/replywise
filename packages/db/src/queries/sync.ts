@@ -4,15 +4,20 @@ import type { DbExecutor } from "../client";
 import { userPreferences } from "../schema/ai";
 import { mailAccounts, messages, threads } from "../schema/mail";
 
+/**
+ * Takes the sync lease if it is free or expired. Returns the lease-until value it set (the
+ * caller's ownership token for releaseSyncLease), or null when another run holds the lease.
+ */
 export async function acquireSyncLease(
   db: DbExecutor,
   mailAccountId: string,
   now: Date,
   leaseMs: number,
-): Promise<boolean> {
+): Promise<Date | null> {
+  const leaseUntil = new Date(now.getTime() + leaseMs);
   const rows = await db
     .update(mailAccounts)
-    .set({ syncLeaseUntil: new Date(now.getTime() + leaseMs) })
+    .set({ syncLeaseUntil: leaseUntil })
     .where(
       and(
         eq(mailAccounts.id, mailAccountId),
@@ -21,14 +26,19 @@ export async function acquireSyncLease(
       ),
     )
     .returning({ id: mailAccounts.id });
-  return rows.length > 0;
+  return rows.length > 0 ? leaseUntil : null;
 }
 
-export async function releaseSyncLease(db: DbExecutor, mailAccountId: string): Promise<void> {
+/** Releases the lease only if it is still the one this run acquired (`leaseUntil`). */
+export async function releaseSyncLease(
+  db: DbExecutor,
+  mailAccountId: string,
+  leaseUntil: Date,
+): Promise<void> {
   await db
     .update(mailAccounts)
     .set({ syncLeaseUntil: null })
-    .where(eq(mailAccounts.id, mailAccountId));
+    .where(and(eq(mailAccounts.id, mailAccountId), eq(mailAccounts.syncLeaseUntil, leaseUntil)));
 }
 
 export async function listSyncableMailAccounts(
@@ -148,6 +158,26 @@ export async function deleteThreadsByProviderIds(
         eq(threads.mailAccountId, mailAccountId),
         inArray(threads.providerThreadId, providerThreadIds),
       ),
+    )
+    .returning({ id: threads.id });
+  return deleted.length;
+}
+
+/** Deletes every thread of the mailbox whose provider id is not in `keepProviderThreadIds`. */
+export async function deleteThreadsNotIn(
+  db: DbExecutor,
+  mailAccountId: string,
+  keepProviderThreadIds: string[],
+): Promise<number> {
+  const deleted = await db
+    .delete(threads)
+    .where(
+      keepProviderThreadIds.length === 0
+        ? eq(threads.mailAccountId, mailAccountId)
+        : and(
+            eq(threads.mailAccountId, mailAccountId),
+            notInArray(threads.providerThreadId, keepProviderThreadIds),
+          ),
     )
     .returning({ id: threads.id });
   return deleted.length;
