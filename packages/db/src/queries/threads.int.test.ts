@@ -79,6 +79,8 @@ describe("listInboxThreads insights", () => {
     const all = await listInboxThreads(db, alice.id);
     expect(all.find((t) => t.id === urgentThreadId)).toMatchObject({
       category: "urgent",
+      urgency: 5,
+      importance: 3,
       reasons: ["Due today."],
     });
     expect(all.find((t) => t.id === otherThreadId)?.category).toBeNull();

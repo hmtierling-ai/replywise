@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../client";
+import { aiUsageEvents } from "../schema/ai";
 import {
   insertMailAccount,
   insertMessage,
@@ -137,6 +138,58 @@ describe("listThreadsPendingClassification", () => {
   });
 });
 
+describe("listThreadsPendingClassification branches", () => {
+  it("skips a thread whose newest message is from the user even if an older one is not", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    await validKey(alice.id);
+    const thread = await insertThread(db, box.id, {
+      lastMessageAt: new Date(now.getTime() - DAY),
+      providerLabels: ["INBOX"],
+    });
+    await insertMessage(db, thread.id, box.id, {
+      sentAt: new Date(now.getTime() - 2 * DAY),
+      isFromUser: false,
+    });
+    await insertMessage(db, thread.id, box.id, {
+      sentAt: new Date(now.getTime() - DAY),
+      isFromUser: true,
+    });
+    expect(await listThreadsPendingClassification(db, since)).toEqual([]);
+  });
+
+  it("skips threads of mailboxes that are not active", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id, { status: "needs_reauth" });
+    await validKey(alice.id);
+    await inboxThread(box.id, new Date(now.getTime() - DAY));
+    expect(await listThreadsPendingClassification(db, since)).toEqual([]);
+  });
+
+  it("only includes users with a valid key", async () => {
+    const alice = await insertUser(db);
+    const bob = await insertUser(db);
+    const aliceBox = await insertMailAccount(db, alice.id);
+    const bobBox = await insertMailAccount(db, bob.id);
+    const a = await inboxThread(aliceBox.id, new Date(now.getTime() - DAY));
+    await inboxThread(bobBox.id, new Date(now.getTime() - DAY));
+    await validKey(alice.id);
+    expect(await listThreadsPendingClassification(db, since)).toEqual([
+      { threadId: a.thread.id, latestMessageId: a.message.id },
+    ]);
+    await saveAiCredential(db, {
+      userId: bob.id,
+      keyCiphertext: Buffer.from("ct"),
+      keyHint: "bbbb",
+      status: "unverified",
+      lastValidatedAt: null,
+    });
+    expect(await listThreadsPendingClassification(db, since)).toEqual([
+      { threadId: a.thread.id, latestMessageId: a.message.id },
+    ]);
+  });
+});
+
 describe("insights, classification source and usage", () => {
   it("upserts one insight per thread and reads it back", async () => {
     const alice = await insertUser(db);
@@ -209,5 +262,32 @@ describe("insights, classification source and usage", () => {
         cacheReadTokens: 100,
       },
     ]);
+  });
+
+  it("excludes other users' events and events before since", async () => {
+    const alice = await insertUser(db);
+    const bob = await insertUser(db);
+    const event = {
+      mailAccountId: null,
+      task: "classify" as const,
+      aiProvider: "anthropic" as const,
+      model: "claude-opus-5-5",
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 1,
+    };
+    await recordAiUsage(db, { ...event, userId: alice.id });
+    await recordAiUsage(db, { ...event, userId: bob.id });
+    await db
+      .insert(aiUsageEvents)
+      .values({ ...event, userId: alice.id, createdAt: new Date(since.getTime() - DAY) });
+    const rows = await summarizeAiUsage(db, alice.id, since);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      calls: 1,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 1,
+    });
   });
 });
