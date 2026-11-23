@@ -17,6 +17,7 @@ export function safeErrorFields(error: unknown): SafeErrorFields {
     return { name: error.name, message: error.message };
   }
   const name = error instanceof Error ? error.name : typeof error;
-  const cause = error instanceof Error ? (error.cause as { code?: unknown } | undefined) : undefined;
+  const cause =
+    error instanceof Error ? (error.cause as { code?: unknown } | undefined) : undefined;
   return typeof cause?.code === "string" ? { name, code: cause.code } : { name };
 }

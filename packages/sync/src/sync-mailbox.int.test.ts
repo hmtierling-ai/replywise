@@ -262,8 +262,9 @@ describe("syncMailbox — run bounds", () => {
 
     // The next run completes from scratch and saves the cursor.
     const retry = createFakeGmail({ historyId: "700", threads: seedThreads(5) });
-    expect(await syncMailbox({ ...syncDeps(base, retry), persistBatchSize: 2 }, mailAccountId))
-      .toMatchObject({ status: "synced", threads: 5 });
+    expect(
+      await syncMailbox({ ...syncDeps(base, retry), persistBatchSize: 2 }, mailAccountId),
+    ).toMatchObject({ status: "synced", threads: 5 });
     expect(await storedThreadIds()).toEqual(["t0", "t1", "t2", "t3", "t4"]);
     expect((await accountRow(mailAccountId))?.syncCursor).toBe("700");
   });
@@ -301,7 +302,11 @@ describe("syncMailbox — drafts and pruning", () => {
           }),
         ],
         t2: [
-          fakeMessage({ providerMessageId: "only-draft", providerThreadId: "t2", labelIds: ["DRAFT"] }),
+          fakeMessage({
+            providerMessageId: "only-draft",
+            providerThreadId: "t2",
+            labelIds: ["DRAFT"],
+          }),
         ],
       },
     });

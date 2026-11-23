@@ -15,7 +15,9 @@ class FakeDrizzleQueryError extends Error {
 describe("safeErrorFields", () => {
   it("keeps only the name and SQLSTATE of a query error, never its message or stack", () => {
     const fields = safeErrorFields(
-      new FakeDrizzleQueryError(Object.assign(new Error("duplicate key secret subject"), { code: "23505" })),
+      new FakeDrizzleQueryError(
+        Object.assign(new Error("duplicate key secret subject"), { code: "23505" }),
+      ),
     );
     expect(fields).toEqual({ name: "DrizzleQueryError", code: "23505" });
     const serialized = JSON.stringify(fields);

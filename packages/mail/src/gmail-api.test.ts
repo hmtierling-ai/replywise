@@ -161,7 +161,13 @@ describe("createGmailApi", () => {
 
     it("retries a rate-limited 403 with a 5/10/20/40 s backoff", async () => {
       const clock = fakeClock();
-      const { fetchImpl } = fakeFetch([rateLimited, rateLimited, rateLimited, rateLimited, threadOk]);
+      const { fetchImpl } = fakeFetch([
+        rateLimited,
+        rateLimited,
+        rateLimited,
+        rateLimited,
+        threadOk,
+      ]);
       const api = createGmailApi("tok", {
         fetch: fetchImpl,
         unitsPerSecond: 1000,
@@ -172,7 +178,7 @@ describe("createGmailApi", () => {
       expect(clock.sleeps.filter((ms) => ms >= 1000)).toEqual([5000, 10000, 20000, 40000]);
     });
 
-    it("applies up to ±20% jitter to the backoff", async () => {
+    it("applies up to +/-20% jitter to the backoff", async () => {
       for (const [random, expected] of [
         [0, 4000],
         [1, 6000],

@@ -86,7 +86,12 @@ describe("sync lease", () => {
       )[0]?.leaseUntil;
     const leaseA = await acquireSyncLease(db, account.id, T0, 600_000);
     // A's lease expires; run B takes over.
-    const leaseB = await acquireSyncLease(db, account.id, new Date(T0.getTime() + 600_001), 600_000);
+    const leaseB = await acquireSyncLease(
+      db,
+      account.id,
+      new Date(T0.getTime() + 600_001),
+      600_000,
+    );
     if (!leaseA || !leaseB) throw new Error("lease not acquired");
 
     await releaseSyncLease(db, account.id, leaseA);
