@@ -1,0 +1,213 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { Db } from "../client";
+import {
+  insertMailAccount,
+  insertMessage,
+  insertThread,
+  insertUser,
+  resetTestDb,
+  setupTestDb,
+} from "../testing";
+import {
+  deleteAiCredential,
+  getAiCredentialForUse,
+  getAiCredentialSummary,
+  getClassificationModel,
+  getThreadForClassification,
+  getThreadInsight,
+  listThreadsPendingClassification,
+  markAiCredentialInvalid,
+  recordAiUsage,
+  saveAiCredential,
+  setClassificationModel,
+  summarizeAiUsage,
+  upsertThreadInsight,
+} from "./ai";
+
+let db: Db;
+let close: () => Promise<void>;
+beforeAll(async () => {
+  ({ db, close } = await setupTestDb());
+});
+afterAll(async () => close());
+beforeEach(async () => resetTestDb(db));
+
+const DAY = 24 * 60 * 60 * 1000;
+const now = new Date("2026-11-23T12:00:00Z");
+const since = new Date(now.getTime() - 7 * DAY);
+
+async function validKey(userId: string) {
+  await saveAiCredential(db, {
+    userId,
+    keyCiphertext: Buffer.from("ct"),
+    keyHint: "abcd",
+    status: "valid",
+    lastValidatedAt: now,
+  });
+}
+
+async function inboxThread(mailAccountId: string, at: Date, fromUser = false) {
+  const thread = await insertThread(db, mailAccountId, {
+    lastMessageAt: at,
+    providerLabels: ["INBOX"],
+  });
+  const message = await insertMessage(db, thread.id, mailAccountId, {
+    sentAt: at,
+    isFromUser: fromUser,
+  });
+  return { thread, message };
+}
+
+describe("AI credentials", () => {
+  it("saves, summarizes, replaces, invalidates and deletes a key per user", async () => {
+    const alice = await insertUser(db);
+    const bob = await insertUser(db);
+    expect(await getAiCredentialSummary(db, alice.id)).toBeNull();
+    await validKey(alice.id);
+    await saveAiCredential(db, {
+      userId: alice.id,
+      keyCiphertext: Buffer.from("ct2"),
+      keyHint: "wxyz",
+      status: "valid",
+      lastValidatedAt: now,
+    });
+    expect(await getAiCredentialSummary(db, alice.id)).toEqual({
+      keyHint: "wxyz",
+      status: "valid",
+      lastValidatedAt: now,
+    });
+    expect((await getAiCredentialForUse(db, alice.id))?.keyCiphertext.toString()).toBe("ct2");
+    expect(await getAiCredentialSummary(db, bob.id)).toBeNull();
+    await markAiCredentialInvalid(db, alice.id);
+    expect((await getAiCredentialSummary(db, alice.id))?.status).toBe("invalid");
+    expect(await deleteAiCredential(db, alice.id)).toBe(true);
+    expect(await deleteAiCredential(db, alice.id)).toBe(false);
+  });
+});
+
+describe("classification model preference", () => {
+  it("defaults to Opus 5.5 and stores a choice", async () => {
+    const alice = await insertUser(db);
+    expect(await getClassificationModel(db, alice.id)).toBe("claude-opus-5-5");
+    await setClassificationModel(db, alice.id, "claude-haiku-5-5");
+    expect(await getClassificationModel(db, alice.id)).toBe("claude-haiku-5-5");
+  });
+});
+
+describe("listThreadsPendingClassification", () => {
+  it("lists recent inbox threads of users with a valid key whose newest message is new and not theirs", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    const fresh = await inboxThread(box.id, new Date(now.getTime() - DAY));
+    await inboxThread(box.id, new Date(now.getTime() - 10 * DAY)); // too old
+    await inboxThread(box.id, new Date(now.getTime() - DAY), true); // user replied last
+    const archived = await insertThread(db, box.id, {
+      lastMessageAt: new Date(now.getTime() - DAY),
+      providerLabels: [],
+    });
+    await insertMessage(db, archived.id, box.id, { sentAt: new Date(now.getTime() - DAY) });
+
+    expect(await listThreadsPendingClassification(db, since)).toEqual([]); // no key yet
+    await validKey(alice.id);
+    expect(await listThreadsPendingClassification(db, since)).toEqual([
+      { threadId: fresh.thread.id, latestMessageId: fresh.message.id },
+    ]);
+
+    await upsertThreadInsight(db, {
+      threadId: fresh.thread.id,
+      category: "important",
+      urgency: 2,
+      importance: 4,
+      needsReply: false,
+      reasons: ["From your manager."],
+      classifiedThroughMessageId: fresh.message.id,
+      aiProvider: "anthropic",
+      model: "claude-opus-5-5",
+      promptVersion: "classify-v1",
+    });
+    expect(await listThreadsPendingClassification(db, since)).toEqual([]);
+
+    const reply = await insertMessage(db, fresh.thread.id, box.id, { sentAt: now });
+    expect(await listThreadsPendingClassification(db, since)).toEqual([
+      { threadId: fresh.thread.id, latestMessageId: reply.id },
+    ]);
+
+    await markAiCredentialInvalid(db, alice.id);
+    expect(await listThreadsPendingClassification(db, since)).toEqual([]);
+  });
+});
+
+describe("insights, classification source and usage", () => {
+  it("upserts one insight per thread and reads it back", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    const { thread, message } = await inboxThread(box.id, now);
+    const base = {
+      threadId: thread.id,
+      urgency: 5,
+      importance: 3,
+      needsReply: true,
+      reasons: ["Deadline is today."],
+      classifiedThroughMessageId: message.id,
+      aiProvider: "anthropic" as const,
+      model: "claude-opus-5-5",
+      promptVersion: "classify-v1",
+    };
+    await upsertThreadInsight(db, { ...base, category: "urgent" });
+    await upsertThreadInsight(db, { ...base, category: "needs_reply", urgency: 2 });
+    expect(await getThreadInsight(db, thread.id)).toMatchObject({
+      category: "needs_reply",
+      urgency: 2,
+      importance: 3,
+      needsReply: true,
+      reasons: ["Deadline is today."],
+      classifiedThroughMessageId: message.id,
+      model: "claude-opus-5-5",
+    });
+  });
+
+  it("loads a thread with its owner, mailbox and messages oldest first", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id, { emailAddress: "alice@gmail.com" });
+    const thread = await insertThread(db, box.id, { subject: "Hello", providerLabels: ["INBOX"] });
+    const second = await insertMessage(db, thread.id, box.id, { sentAt: now });
+    const first = await insertMessage(db, thread.id, box.id, {
+      sentAt: new Date(now.getTime() - DAY),
+    });
+    const source = await getThreadForClassification(db, thread.id);
+    expect(source?.userId).toBe(alice.id);
+    expect(source?.mailboxEmail).toBe("alice@gmail.com");
+    expect(source?.thread).toMatchObject({
+      id: thread.id,
+      subject: "Hello",
+      mailAccountId: box.id,
+    });
+    expect(source?.messages.map((m) => m.id)).toEqual([first.id, second.id]);
+  });
+
+  it("sums usage per task and model since a date", async () => {
+    const alice = await insertUser(db);
+    const event = {
+      userId: alice.id,
+      mailAccountId: null,
+      task: "classify" as const,
+      aiProvider: "anthropic" as const,
+      model: "claude-opus-5-5",
+      inputTokens: 1000,
+      outputTokens: 200,
+      cacheReadTokens: 50,
+    };
+    await recordAiUsage(db, event);
+    await recordAiUsage(db, event);
+    expect(await summarizeAiUsage(db, alice.id, since)).toEqual([
+      {
+        task: "classify",
+        model: "claude-opus-5-5",
+        calls: 2,
+        inputTokens: 2000,
+        outputTokens: 400,
+        cacheReadTokens: 100,
+      },
+    ]);
+  });
+});

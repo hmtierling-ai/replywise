@@ -8,6 +8,7 @@ import {
   resetTestDb,
   setupTestDb,
 } from "../testing";
+import { upsertThreadInsight } from "./ai";
 import { getThreadForUser, listInboxThreads } from "./threads";
 
 let db: Db;
@@ -43,7 +44,46 @@ describe("listInboxThreads", () => {
     const list = await listInboxThreads(db, alice.id);
     expect(list.map((t) => t.subject)).toEqual(["Newer", "Older"]);
     expect(list[0]).toMatchObject({ isUnread: true, mailboxEmail: "alice@gmail.com" });
-    expect(await listInboxThreads(db, alice.id, 1)).toHaveLength(1);
+    expect(await listInboxThreads(db, alice.id, { limit: 1 })).toHaveLength(1);
+  });
+});
+
+describe("listInboxThreads insights", () => {
+  it("returns insight fields and filters by category", async () => {
+    const alice = await insertUser(db);
+    const mailbox = await insertMailAccount(db, alice.id);
+    const urgentThread = await insertThread(db, mailbox.id, {
+      providerThreadId: "u",
+      providerLabels: ["INBOX"],
+    });
+    const urgentMessage = await insertMessage(db, urgentThread.id, mailbox.id);
+    const otherThread = await insertThread(db, mailbox.id, {
+      providerThreadId: "o",
+      providerLabels: ["INBOX"],
+    });
+    await insertMessage(db, otherThread.id, mailbox.id);
+    const urgentThreadId = urgentThread.id;
+    const otherThreadId = otherThread.id;
+    await upsertThreadInsight(db, {
+      threadId: urgentThreadId,
+      category: "urgent",
+      urgency: 5,
+      importance: 3,
+      needsReply: true,
+      reasons: ["Due today."],
+      classifiedThroughMessageId: urgentMessage.id,
+      aiProvider: "anthropic",
+      model: "claude-opus-5-5",
+      promptVersion: "classify-v1",
+    });
+    const all = await listInboxThreads(db, alice.id);
+    expect(all.find((t) => t.id === urgentThreadId)).toMatchObject({
+      category: "urgent",
+      reasons: ["Due today."],
+    });
+    expect(all.find((t) => t.id === otherThreadId)?.category).toBeNull();
+    const urgent = await listInboxThreads(db, alice.id, { category: "urgent" });
+    expect(urgent.map((t) => t.id)).toEqual([urgentThreadId]);
   });
 });
 

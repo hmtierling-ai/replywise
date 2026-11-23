@@ -1,4 +1,5 @@
 export * from "./client";
+export * from "./queries/ai";
 export * from "./queries/audit";
 export * from "./queries/mailboxes";
 export * from "./queries/maintenance";

@@ -1,6 +1,7 @@
-import type { EmailAddress, MailProviderId } from "@replywise/core";
-import { and, arrayContains, asc, desc, eq } from "drizzle-orm";
+import type { EmailAddress, InboxCategory, MailProviderId } from "@replywise/core";
+import { and, arrayContains, asc, desc, eq, type SQL } from "drizzle-orm";
 import type { DbExecutor } from "../client";
+import { threadInsights } from "../schema/ai";
 import { mailAccounts, messages, threads } from "../schema/mail";
 
 export interface InboxThread {
@@ -13,13 +14,22 @@ export interface InboxThread {
   isUnread: boolean;
   mailAccountId: string;
   mailboxEmail: string;
+  category: InboxCategory | null;
+  urgency: number | null;
+  importance: number | null;
+  reasons: string[] | null;
 }
 
 export async function listInboxThreads(
   db: DbExecutor,
   userId: string,
-  limit = 50,
+  options: { limit?: number; category?: InboxCategory } = {},
 ): Promise<InboxThread[]> {
+  const conditions: SQL[] = [
+    eq(mailAccounts.userId, userId),
+    arrayContains(threads.providerLabels, ["INBOX"]),
+  ];
+  if (options.category) conditions.push(eq(threadInsights.category, options.category));
   return db
     .select({
       id: threads.id,
@@ -31,12 +41,17 @@ export async function listInboxThreads(
       isUnread: threads.isUnread,
       mailAccountId: threads.mailAccountId,
       mailboxEmail: mailAccounts.emailAddress,
+      category: threadInsights.category,
+      urgency: threadInsights.urgency,
+      importance: threadInsights.importance,
+      reasons: threadInsights.reasons,
     })
     .from(threads)
     .innerJoin(mailAccounts, eq(threads.mailAccountId, mailAccounts.id))
-    .where(and(eq(mailAccounts.userId, userId), arrayContains(threads.providerLabels, ["INBOX"])))
+    .leftJoin(threadInsights, eq(threadInsights.threadId, threads.id))
+    .where(and(...conditions))
     .orderBy(desc(threads.lastMessageAt))
-    .limit(limit);
+    .limit(options.limit ?? 50);
 }
 
 export interface ThreadDetail {
