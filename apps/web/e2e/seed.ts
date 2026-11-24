@@ -5,7 +5,9 @@ import {
   createDb,
   mailAccounts,
   messages,
+  replyDrafts,
   threadInsights,
+  threadSummaries,
   threads,
   users,
 } from "@replywise/db";
@@ -44,6 +46,22 @@ export async function withSeed<T>(
         needsReply?: boolean;
       },
     ) => Promise<void>;
+    summary: (
+      threadId: string,
+      input: { status: "pending" | "ready" | "failed"; text?: string; error?: string },
+    ) => Promise<void>;
+    draft: (
+      userEmail: string,
+      threadId: string,
+      input: {
+        status: "pending" | "generated" | "edited" | "saved" | "failed";
+        body?: string;
+        error?: string;
+        providerDraftId?: string;
+        savedAt?: Date;
+        saveRequestedAt?: Date;
+      },
+    ) => Promise<string>;
   }) => Promise<T>,
 ): Promise<T> {
   const url = process.env.DATABASE_URL;
@@ -147,6 +165,62 @@ export async function withSeed<T>(
           model: "claude-opus-5-5",
           promptVersion: "classify-v1",
         });
+      },
+      async summary(threadId, input) {
+        const [latest] = await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(eq(messages.threadId, threadId))
+          .orderBy(desc(messages.sentAt))
+          .limit(1);
+        if (!latest) throw new Error(`no messages for thread ${threadId}`);
+        const values = {
+          status: input.status,
+          summary: input.text ?? null,
+          throughMessageId: input.status === "ready" ? latest.id : null,
+          model: "claude-opus-5-5",
+          error: input.error ?? null,
+          requestedAt: new Date(),
+        };
+        await db
+          .insert(threadSummaries)
+          .values({ threadId, ...values })
+          .onConflictDoUpdate({ target: threadSummaries.threadId, set: values });
+      },
+      async draft(userEmail, threadId, input) {
+        const [user] = await db.select().from(users).where(eq(users.email, userEmail));
+        if (!user) throw new Error(`no user ${userEmail}`);
+        const [latest] = await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(eq(messages.threadId, threadId))
+          .orderBy(desc(messages.sentAt))
+          .limit(1);
+        const [row] = await db
+          .insert(replyDrafts)
+          .values({
+            threadId,
+            userId: user.id,
+            tone: "professional",
+            bodyCiphertext: Buffer.from("placeholder"),
+            status: input.status,
+            forMessageId: latest?.id ?? null,
+            error: input.error ?? null,
+            providerDraftId: input.providerDraftId ?? null,
+            savedAt: input.savedAt ?? null,
+            saveRequestedAt: input.saveRequestedAt ?? null,
+            aiProvider: "anthropic",
+            model: "claude-opus-5-5",
+          })
+          .returning({ id: replyDrafts.id });
+        if (!row) throw new Error("seed draft failed");
+        if (input.body !== undefined) {
+          await db
+            .update(replyDrafts)
+            .set({ bodyCiphertext: await encryptor.encrypt(input.body, aad.replyDraft(row.id)) })
+            .where(eq(replyDrafts.id, row.id));
+        }
+        return row.id;
       },
     });
   } finally {

@@ -23,12 +23,13 @@ test("shows only the hint of a stored key, removes it, and saves the model", asy
   await expect(page.getByText("Valid")).toBeVisible();
   await expect(page.locator("body")).not.toContainText("sk-ant-e2e");
 
-  await page.getByLabel(/Claude Haiku 5.5/).check();
+  // The writing-preferences "Reply model: …" radios also match a loose label, so anchor the name.
+  await page.getByRole("radio", { name: /^Claude Haiku 5\.5/ }).check();
   await page.getByRole("button", { name: "Save model" }).click();
   await expect(
     page.getByRole("status").filter({ hasText: "Classification model updated" }),
   ).toBeVisible();
-  await expect(page.getByLabel(/Claude Haiku 5.5/)).toBeChecked();
+  await expect(page.getByRole("radio", { name: /^Claude Haiku 5\.5/ })).toBeChecked();
 
   await page.getByRole("button", { name: "Remove key" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Key removed" })).toBeVisible();
