@@ -279,6 +279,46 @@ describe("insights, classification source and usage", () => {
     });
   });
 
+  it("does not overwrite an answered thread with an insight for an older message", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    const thread = await insertThread(db, box.id, { providerLabels: ["INBOX"] });
+    const m1 = await insertMessage(db, thread.id, box.id, {
+      sentAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
+      isFromUser: false,
+    });
+    const insight = {
+      threadId: thread.id,
+      category: "needs_reply" as const,
+      urgency: 3,
+      importance: 3,
+      needsReply: true,
+      reasons: ["Asks a question."],
+      classifiedThroughMessageId: m1.id,
+      aiProvider: "anthropic" as const,
+      model: "claude-opus-5-5",
+      promptVersion: "classify-v1",
+    };
+    await insertMessage(db, thread.id, box.id, {
+      sentAt: new Date(now.getTime() - 60 * 60 * 1000),
+      isFromUser: true,
+    });
+    await upsertThreadInsight(db, insight);
+    expect(await getThreadInsight(db, thread.id)).toBeNull();
+
+    const other = await insertThread(db, box.id, { providerLabels: ["INBOX"] });
+    const only = await insertMessage(db, other.id, box.id, {
+      sentAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
+      isFromUser: false,
+    });
+    await upsertThreadInsight(db, {
+      ...insight,
+      threadId: other.id,
+      classifiedThroughMessageId: only.id,
+    });
+    expect(await getThreadInsight(db, other.id)).toMatchObject({ needsReply: true });
+  });
+
   it("markThreadAnswered clears needs_reply with a category matching deriveCategory", async () => {
     const alice = await insertUser(db);
     const box = await insertMailAccount(db, alice.id);

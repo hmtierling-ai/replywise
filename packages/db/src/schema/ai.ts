@@ -16,6 +16,7 @@ import {
 import { bytea, createdAt, updatedAt } from "../columns";
 import { users } from "./auth";
 import {
+  aiJobStatusEnum,
   aiProviderEnum,
   aiTaskEnum,
   credentialStatusEnum,
@@ -57,6 +58,23 @@ export const threadInsights = pgTable(
   ],
 );
 
+export const threadSummaries = pgTable("thread_summaries", {
+  threadId: uuid("thread_id")
+    .primaryKey()
+    .references(() => threads.id, { onDelete: "cascade" }),
+  status: aiJobStatusEnum("status").notNull().default("pending"),
+  /** Plain-text summary (spec §4 keeps summaries unencrypted). */
+  summary: text("summary"),
+  throughMessageId: uuid("through_message_id").references(() => messages.id, {
+    onDelete: "set null",
+  }),
+  model: text("model"),
+  /** Fixed, non-secret error code. */
+  error: text("error"),
+  requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: updatedAt(),
+});
+
 export const replyDrafts = pgTable(
   "reply_drafts",
   {
@@ -72,6 +90,12 @@ export const replyDrafts = pgTable(
     /** Encrypted reply text; AAD = aad.replyDraft(id). */
     bodyCiphertext: bytea("body_ciphertext").notNull(),
     status: draftStatusEnum("status").notNull().default("generated"),
+    /** The thread message this reply answers (auto-draft dedupe; MIME In-Reply-To target). */
+    forMessageId: uuid("for_message_id").references(() => messages.id, { onDelete: "set null" }),
+    /** Set when the user asks to save to Gmail; cleared/kept per markDraftSaved/failDraftSave. */
+    saveRequestedAt: timestamp("save_requested_at", { withTimezone: true }),
+    /** Fixed, non-secret error code of the last generation or save failure. */
+    error: text("error"),
     providerDraftId: text("provider_draft_id"),
     savedAt: timestamp("saved_at", { withTimezone: true }),
     aiProvider: aiProviderEnum("ai_provider").notNull(),

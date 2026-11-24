@@ -1,6 +1,7 @@
 export * from "./client";
 export * from "./queries/ai";
 export * from "./queries/audit";
+export * from "./queries/generation";
 export * from "./queries/mailboxes";
 export * from "./queries/maintenance";
 export * from "./queries/sync";

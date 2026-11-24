@@ -15,6 +15,13 @@
       "when": 1794956287728,
       "tag": "0001_sync_lease",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795559445791,
+      "tag": "0002_summaries_drafts",
+      "breakpoints": true
     }
   ]
 }

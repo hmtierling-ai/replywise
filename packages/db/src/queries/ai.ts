@@ -144,6 +144,18 @@ export interface InsightWrite {
 
 export async function upsertThreadInsight(db: DbExecutor, input: InsightWrite): Promise<void> {
   const { threadId, ...rest } = input;
+  // Skip when the user has already replied after the classified message (the reply clears
+  // needs_reply in sync; an in-flight classification must not resurrect it).
+  const rows = await db.execute<{ answered: boolean }>(sql`
+    select exists (
+      select 1 from ${messages} newer, ${messages} base
+      where base.id = ${input.classifiedThroughMessageId}
+        and newer.thread_id = ${threadId}
+        and newer.is_from_user = true
+        and (newer.sent_at, newer.id) > (base.sent_at, base.id)
+    ) as answered
+  `);
+  if ([...rows][0]?.answered) return;
   await db
     .insert(threadInsights)
     .values(input)
