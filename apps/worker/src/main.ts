@@ -1,16 +1,19 @@
 import { type AiProvider, createAnthropicProvider } from "@replywise/ai";
 import type { WorkerEnv } from "@replywise/config";
 import { createDb } from "@replywise/db";
-import type { GmailApiFactory } from "@replywise/mail";
+import type { GmailApiFactory, GmailDraftsFactory } from "@replywise/mail";
 import type { Logger } from "@replywise/observability";
 import { createJobQueue, createJobWorker, createRedisConnection } from "@replywise/queue";
 import type { Worker } from "bullmq";
-import { buildSyncDeps } from "./deps";
+import { buildGenerationDeps, buildSyncDeps } from "./deps";
 import { classifyThreadHandler } from "./jobs/classify-thread";
 import { enqueueClassificationsHandler } from "./jobs/enqueue-classifications";
+import { generateDraftHandler } from "./jobs/generate-draft";
 import { purgeBodiesHandler } from "./jobs/purge-bodies";
 import { purgeOAuthStatesHandler } from "./jobs/purge-oauth-states";
 import { reconcileSyncSchedulesHandler } from "./jobs/reconcile-sync-schedules";
+import { saveDraftHandler } from "./jobs/save-draft";
+import { summarizeThreadHandler } from "./jobs/summarize-thread";
 import { syncMailboxHandler } from "./jobs/sync-mailbox";
 import { safeErrorFields } from "./log-error";
 
@@ -26,7 +29,12 @@ const AI_CONCURRENCY = 2;
 export async function startWorker(
   env: WorkerEnv,
   logger: Logger,
-  options: { queuePrefix?: string; gmail?: GmailApiFactory; ai?: AiProvider } = {},
+  options: {
+    queuePrefix?: string;
+    gmail?: GmailApiFactory;
+    ai?: AiProvider;
+    gmailDrafts?: GmailDraftsFactory;
+  } = {},
 ) {
   const { db, close: closeDb } = createDb(env.DATABASE_URL);
   const queueConnection = createRedisConnection(env.REDIS_URL);
@@ -37,6 +45,10 @@ export async function startWorker(
   const queue = createJobQueue(queueConnection, prefix);
   const syncDeps = buildSyncDeps(env, db, options.gmail);
   const ai = options.ai ?? createAnthropicProvider();
+  const generationDeps = buildGenerationDeps(syncDeps, logger, queue, {
+    ai,
+    ...(options.gmailDrafts ? { gmailDrafts: options.gmailDrafts } : {}),
+  });
 
   const maintenanceWorker = createJobWorker(
     "maintenance",
@@ -59,7 +71,10 @@ export async function startWorker(
     "ai",
     aiConnection,
     {
-      "thread.classify": classifyThreadHandler({ db, encryptor: syncDeps.encryptor, ai, logger }),
+      "thread.classify": classifyThreadHandler(generationDeps),
+      "thread.summarize": summarizeThreadHandler(generationDeps),
+      "draft.generate": generateDraftHandler(generationDeps),
+      "draft.save": saveDraftHandler(generationDeps),
     },
     { concurrency: AI_CONCURRENCY, ...prefix },
   );

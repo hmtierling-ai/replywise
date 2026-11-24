@@ -9,8 +9,11 @@ import {
   type QueueName,
 } from "./jobs";
 
+/** Attempts per job; handlers compare `JobContext.attempt` with it to detect the final try. */
+export const JOB_ATTEMPTS = 5;
+
 const DEFAULT_JOB_OPTIONS = {
-  attempts: 5,
+  attempts: JOB_ATTEMPTS,
   backoff: { type: "exponential", delay: 5_000 },
   removeOnComplete: { age: 24 * 3600, count: 1_000 },
   removeOnFail: { age: 7 * 24 * 3600 },

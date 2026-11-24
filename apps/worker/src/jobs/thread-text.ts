@@ -9,7 +9,7 @@ import type { ClassificationSource } from "@replywise/db";
 import { decryptBody } from "@replywise/sync";
 
 /** Plain-text view of the newest messages; falls back to the snippet when no body is cached. */
-export async function buildClassifyInput(
+export async function buildThreadInput(
   encryptor: Encryptor,
   source: ClassificationSource,
 ): Promise<ClassifyInput> {

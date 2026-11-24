@@ -1,33 +1,35 @@
-import {
-  AiError,
-  AiKeyInvalidError,
-  type AiProvider,
-  CLASSIFY_PROMPT_VERSION,
-  isRetryableAiError,
-} from "@replywise/ai";
+import { type AiProvider, CLASSIFY_PROMPT_VERSION } from "@replywise/ai";
 import { deriveCategory } from "@replywise/core";
-import { aad, type Encryptor } from "@replywise/crypto";
+import { aad } from "@replywise/crypto";
 import {
-  type Db,
-  getAiCredentialForUse,
+  createPendingDraft,
+  failDraft,
+  getAutoDraftSetting,
   getClassificationModel,
   getThreadForClassification,
   getThreadInsight,
-  markAiCredentialInvalid,
-  recordAiUsage,
+  getWritingPreferences,
+  hasDraftForMessage,
   upsertThreadInsight,
 } from "@replywise/db";
-import type { Logger } from "@replywise/observability";
+import type { JobContext } from "@replywise/queue";
 import { UnrecoverableError } from "bullmq";
-import { safeErrorFields, sanitizeError } from "../log-error";
-import { buildClassifyInput } from "./classify-input";
+import { safeErrorFields } from "../log-error";
+import {
+  FIRST_ATTEMPT,
+  type GenerationDeps,
+  handleAiFailure,
+  loadUsableKey,
+  rethrowSafely,
+  usageRecorder,
+} from "./generation-shared";
+import { buildThreadInput } from "./thread-text";
 
-export interface ClassifyThreadDeps {
-  db: Db;
-  encryptor: Encryptor;
-  ai: AiProvider;
-  logger: Logger;
-}
+/** `queue` enables auto-draft for Needs Reply; without it classification still runs. */
+export type ClassifyThreadDeps = Pick<
+  GenerationDeps,
+  "db" | "encryptor" | "ai" | "logger" | "queue"
+>;
 
 const INSIGHT_WRITE_TRIES = 3;
 const INSIGHT_WRITE_BASE_DELAY_MS = 200;
@@ -36,14 +38,12 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 export function classifyThreadHandler(deps: ClassifyThreadDeps) {
   return async (
     payload: { threadId: string; messageId: string },
-    _context?: unknown,
+    context: JobContext = FIRST_ATTEMPT,
   ): Promise<void> => {
     try {
-      await classify(deps, payload);
+      await classify(deps, payload, context);
     } catch (error) {
-      // BullMQ persists message and stack in Redis: only fixed-message errors may pass as they are.
-      if (error instanceof UnrecoverableError || error instanceof AiError) throw error;
-      throw sanitizeError(error);
+      await rethrowSafely(error, context);
     }
   };
 }
@@ -51,6 +51,7 @@ export function classifyThreadHandler(deps: ClassifyThreadDeps) {
 async function classify(
   deps: ClassifyThreadDeps,
   { threadId, messageId }: { threadId: string; messageId: string },
+  context: JobContext,
 ): Promise<void> {
   const source = await getThreadForClassification(deps.db, threadId);
   if (!source) return; // thread deleted since the scan
@@ -61,51 +62,31 @@ async function classify(
   const existing = await getThreadInsight(deps.db, threadId);
   if (existing?.classifiedThroughMessageId === latest.id) return;
 
-  const credential = await getAiCredentialForUse(deps.db, source.userId);
-  if (credential?.status !== "valid") return;
-  // Just-in-time decryption; the key lives only in this function's scope.
-  const apiKey = await deps.encryptor.decryptString(
-    credential.keyCiphertext,
-    aad.aiCredential(source.userId, "anthropic"),
-  );
+  const key = await loadUsableKey(deps, source.userId);
+  if (!key) return;
   const model = await getClassificationModel(deps.db, source.userId);
-  const input = await buildClassifyInput(deps.encryptor, source);
+  const input = await buildThreadInput(deps.encryptor, source);
 
   let result: Awaited<ReturnType<AiProvider["classify"]>>;
   try {
     result = await deps.ai.classify(
       {
-        apiKey,
+        apiKey: key.apiKey,
         model,
-        onUsage: async (usage) => {
-          // The adapter ignores failures here, so log them (never content or the key).
-          try {
-            await recordAiUsage(deps.db, {
-              userId: source.userId,
-              mailAccountId: source.thread.mailAccountId,
-              task: "classify",
-              aiProvider: deps.ai.id,
-              model,
-              ...usage,
-            });
-          } catch (error) {
-            deps.logger.warn({ threadId, error: safeErrorFields(error) }, "ai usage not recorded");
-          }
-        },
+        onUsage: usageRecorder(deps, source, "classify", model, threadId),
       },
       input,
     );
   } catch (error) {
-    if (error instanceof AiKeyInvalidError) {
-      // Version-guarded: a key the user saved while this call ran must not be rejected.
-      await markAiCredentialInvalid(deps.db, source.userId, credential.updatedAt);
-      deps.logger.warn({ threadId, error: safeErrorFields(error) }, "classification failed");
-      throw new UnrecoverableError(error.name);
-    }
-    if (isRetryableAiError(error)) throw error;
-    // Refusal, bad output or a rejected request: retrying the same input won't help.
-    deps.logger.warn({ threadId, error: safeErrorFields(error) }, "classification failed");
-    throw new UnrecoverableError(error instanceof Error ? error.name : "AiError");
+    // No row to fail: classification has no status column.
+    return handleAiFailure(deps, error, {
+      userId: source.userId,
+      keyVersion: key.version,
+      threadId,
+      context,
+      fail: async () => {},
+      logMessage: "classification failed",
+    });
   }
 
   const category = deriveCategory(result);
@@ -135,4 +116,48 @@ async function classify(
     }
   }
   deps.logger.info({ threadId, category }, "thread classified");
+
+  if (result.needsReply && deps.queue) {
+    // The insight is stored; a BullMQ retry would skip this thread, so log rather than throw.
+    try {
+      await autoDraft(deps, source.userId, source.thread.mailAccountId, threadId, latest.id);
+    } catch (error) {
+      deps.logger.warn({ threadId, error: safeErrorFields(error) }, "auto-draft not queued");
+    }
+  }
+}
+
+/** Queues one reply draft for the newest message when the mailbox opted in to auto-draft. */
+async function autoDraft(
+  deps: ClassifyThreadDeps,
+  userId: string,
+  mailAccountId: string,
+  threadId: string,
+  messageId: string,
+): Promise<void> {
+  const { queue } = deps;
+  if (!queue) return;
+  if (!(await getAutoDraftSetting(deps.db, mailAccountId))) return;
+  if (await hasDraftForMessage(deps.db, threadId, messageId)) return;
+  const prefs = await getWritingPreferences(deps.db, userId);
+  const draftId = await createPendingDraft(deps.db, {
+    threadId,
+    userId,
+    tone: prefs.defaultTone,
+    instructions: null,
+    forMessageId: messageId,
+    // The id (and so the real AAD) does not exist before insert. This placeholder is never
+    // decrypted: readers skip pending bodies and completeDraft replaces it with the real body.
+    placeholderCiphertext: await deps.encryptor.encrypt("", aad.replyDraft("pending")),
+    aiProvider: deps.ai.id,
+    model: prefs.generationModel,
+  });
+  try {
+    await queue.enqueue("draft.generate", { draftId }, { jobId: `draft_${draftId}` });
+  } catch (error) {
+    // A pending draft with no job would block auto-draft for this message forever.
+    await failDraft(deps.db, draftId, "internal");
+    throw error;
+  }
+  deps.logger.info({ threadId, draftId }, "auto-draft queued");
 }

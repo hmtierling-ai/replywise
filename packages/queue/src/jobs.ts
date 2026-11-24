@@ -12,6 +12,9 @@ export const jobDefinitions = {
     queue: "ai",
     payload: z.object({ threadId: z.uuid(), messageId: z.uuid() }).strict(),
   },
+  "thread.summarize": { queue: "ai", payload: z.object({ threadId: z.uuid() }).strict() },
+  "draft.generate": { queue: "ai", payload: z.object({ draftId: z.uuid() }).strict() },
+  "draft.save": { queue: "ai", payload: z.object({ draftId: z.uuid() }).strict() },
   "mailbox.sync": { queue: "sync", payload: z.object({ mailAccountId: z.uuid() }).strict() },
 } as const satisfies Record<string, { queue: QueueName; payload: z.ZodType }>;
 

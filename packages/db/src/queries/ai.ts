@@ -310,7 +310,7 @@ export async function listThreadsPendingClassification(
 }
 
 export interface ClassificationSource {
-  thread: { id: string; subject: string; mailAccountId: string };
+  thread: { id: string; subject: string; mailAccountId: string; providerThreadId: string };
   userId: string;
   mailboxEmail: string;
   /** Oldest first. */
@@ -324,7 +324,12 @@ export async function getThreadForClassification(
 ): Promise<ClassificationSource | null> {
   const [row] = await db
     .select({
-      thread: { id: threads.id, subject: threads.subject, mailAccountId: threads.mailAccountId },
+      thread: {
+        id: threads.id,
+        subject: threads.subject,
+        mailAccountId: threads.mailAccountId,
+        providerThreadId: threads.providerThreadId,
+      },
       userId: mailAccounts.userId,
       mailboxEmail: mailAccounts.emailAddress,
     })

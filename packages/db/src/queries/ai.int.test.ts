@@ -415,6 +415,7 @@ describe("insights, classification source and usage", () => {
       id: thread.id,
       subject: "Hello",
       mailAccountId: box.id,
+      providerThreadId: thread.providerThreadId,
     });
     expect(source?.messages.map((m) => m.id)).toEqual([first.id, second.id]);
   });
