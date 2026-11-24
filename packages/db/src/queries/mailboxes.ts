@@ -13,6 +13,7 @@ const summaryColumns = {
   lastSyncedAt: mailAccounts.lastSyncedAt,
   lastError: mailAccounts.lastError,
   createdAt: mailAccounts.createdAt,
+  autoDraftNeedsReply: mailAccounts.autoDraftNeedsReply,
 };
 
 export type MailAccountSummary = {

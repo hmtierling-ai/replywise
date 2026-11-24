@@ -1,6 +1,7 @@
 "use server";
 
 import { isMailProviderId } from "@replywise/core";
+import { setAutoDraft } from "@replywise/db";
 import {
   ConnectError,
   disconnectMailbox,
@@ -11,6 +12,7 @@ import {
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
 import { getMailboxDeps, oauthCallbackUrl, requestContext } from "@/lib/mailbox";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -35,6 +37,14 @@ export async function connectMailboxAction(formData: FormData): Promise<void> {
     throw error;
   }
   redirect(authorizationUrl);
+}
+
+export async function setAutoDraftAction(formData: FormData): Promise<void> {
+  const user = await requireUser();
+  const mailAccountId = String(formData.get("mailAccountId") ?? "");
+  if (!UUID_RE.test(mailAccountId)) redirect(MAILBOXES_PATH);
+  await setAutoDraft(getDb(), user.id, mailAccountId, formData.get("enabled") === "on");
+  redirect(MAILBOXES_PATH);
 }
 
 export async function disconnectMailboxAction(formData: FormData): Promise<void> {

@@ -1,12 +1,13 @@
 "use server";
 
-import { isClassificationModel } from "@replywise/core";
+import { isAiModel, isClassificationModel, REPLY_TONES, type ReplyTone } from "@replywise/core";
 import { aad } from "@replywise/crypto";
 import {
   deleteAiCredential,
   insertAuditLog,
   saveAiCredential,
   setClassificationModel,
+  setWritingPreferences,
 } from "@replywise/db";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -69,4 +70,22 @@ export async function setClassificationModelAction(formData: FormData): Promise<
   if (!isClassificationModel(model)) redirect(`${AI_PATH}?error=invalid_model`);
   await setClassificationModel(getDb(), user.id, model);
   redirect(`${AI_PATH}?saved=model`);
+}
+
+export async function saveWritingPreferencesAction(formData: FormData): Promise<void> {
+  const user = await requireUser();
+  const tone = String(formData.get("defaultTone") ?? "");
+  const model = String(formData.get("generationModel") ?? "");
+  const language = String(formData.get("replyLanguage") ?? "").trim();
+  if (!(REPLY_TONES as readonly string[]).includes(tone) || !isAiModel(model)) {
+    redirect(`${AI_PATH}?error=invalid_preferences`);
+  }
+  await setWritingPreferences(getDb(), user.id, {
+    defaultTone: tone as ReplyTone,
+    generationModel: model,
+    signature: String(formData.get("signature") ?? "").slice(0, 1_000),
+    writingStyleNotes: String(formData.get("writingStyleNotes") ?? "").slice(0, 2_000),
+    replyLanguage: language ? language.slice(0, 35) : null,
+  });
+  redirect(`${AI_PATH}?saved=writing`);
 }

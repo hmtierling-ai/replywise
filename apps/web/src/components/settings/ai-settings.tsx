@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
+import { WritingSettings } from "./writing-settings";
 
 const STATUS = {
   valid: { label: "Valid", variant: "secondary" },
@@ -105,6 +106,8 @@ export async function AiSettings() {
           </div>
         </form>
       </section>
+
+      <WritingSettings />
 
       <section
         aria-labelledby="ai-usage-heading"

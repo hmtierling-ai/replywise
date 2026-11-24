@@ -31,6 +31,7 @@ describe("mailbox queries are scoped to their owner", () => {
     const list = await listMailAccounts(db, alice.id);
     expect(list.map((a) => a.emailAddress)).toEqual(["alice@gmail.com"]);
     expect(list[0]).not.toHaveProperty("tokensCiphertext");
+    expect(list[0]?.autoDraftNeedsReply).toBe(false);
   });
 
   it("does not let one user read or delete another user's mailbox", async () => {

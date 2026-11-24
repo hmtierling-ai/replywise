@@ -1,7 +1,7 @@
 import { listMailAccounts, type MailAccountSummary } from "@replywise/db";
 import { Mail } from "lucide-react";
 import { connection } from "next/server";
-import { connectMailboxAction } from "@/app/(app)/settings/mailboxes/actions";
+import { connectMailboxAction, setAutoDraftAction } from "@/app/(app)/settings/mailboxes/actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth";
@@ -57,6 +57,29 @@ export async function MailboxList() {
                   </form>
                 ) : null}
                 <DisconnectButton mailAccountId={account.id} email={account.emailAddress} />
+                {account.provider === "gmail" ? (
+                  <div className="basis-full pl-7">
+                    <form action={setAutoDraftAction} className="flex items-center gap-2 text-xs">
+                      <input type="hidden" name="mailAccountId" value={account.id} />
+                      <input
+                        type="checkbox"
+                        name="enabled"
+                        id={`auto-${account.id}`}
+                        defaultChecked={account.autoDraftNeedsReply}
+                      />
+                      <label htmlFor={`auto-${account.id}`}>
+                        Auto-draft replies for Needs Reply
+                      </label>
+                      <Button type="submit" size="sm" variant="outline">
+                        Save
+                      </Button>
+                    </form>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Writes a draft with your key when mail needs a reply. It stays in Replywise
+                      until you save it to Gmail.
+                    </p>
+                  </div>
+                ) : null}
               </li>
             );
           })}
