@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { CLASSIFY_MAX_TOKENS, createAnthropicProvider } from "./anthropic";
 import { CLASSIFY_SYSTEM_PROMPT } from "./classify-prompt";
+import { DRAFT_SYSTEM_PROMPT } from "./draft-prompt";
 import {
   AiKeyInvalidError,
   AiOutputError,
@@ -10,7 +11,8 @@ import {
   AiRequestError,
   AiUnavailableError,
 } from "./errors";
-import type { ClassifyInput } from "./types";
+import { SUMMARY_SYSTEM_PROMPT } from "./summarize-prompt";
+import type { ClassifyInput, DraftReplyInput } from "./types";
 
 const input: ClassifyInput = {
   mailboxEmail: "me@gmail.com",
@@ -202,6 +204,106 @@ describe("createAnthropicProvider.classify", () => {
       input,
     );
     expect(result.urgency).toBe(4);
+  });
+});
+
+function textResponse(payload: unknown) {
+  return { ...ok, content: [{ type: "text", text: JSON.stringify(payload) }] };
+}
+
+const draftInput: DraftReplyInput = {
+  ...input,
+  tone: "friendly",
+  instructions: "Say yes",
+  writingStyleNotes: "Sign off with Cheers",
+  replyLanguage: null,
+};
+
+describe("createAnthropicProvider.summarize / draftReply", () => {
+  it("summarize sends a medium-effort, tool-less request with the summary prompt", async () => {
+    const client = fakeClient(() => textResponse({ summary: "  Ada wants a signature.  " }));
+    const onUsage = vi.fn();
+    const result = await createAnthropicProvider({ client: () => client }).summarize(
+      { ...opusCtx, onUsage },
+      input,
+    );
+    expect(result).toEqual({ summary: "Ada wants a signature." });
+    expect(onUsage).toHaveBeenCalledWith({
+      inputTokens: 950,
+      outputTokens: 120,
+      cacheReadTokens: 300,
+    });
+    const params = paramsOf(client);
+    expect(params.output_config).toMatchObject({ effort: "medium" });
+    expect(params.max_tokens).toBe(4096);
+    for (const key of ["tools", "thinking", "temperature", "top_p", "top_k"]) {
+      expect(params).not.toHaveProperty(key);
+    }
+    expect(params.system).toEqual([
+      expect.objectContaining({
+        text: SUMMARY_SYSTEM_PROMPT,
+        cache_control: { type: "ephemeral" },
+      }),
+    ]);
+    const messages = params.messages as Array<{ content: string }>;
+    expect(messages[0]?.content).toContain("Summarize the email thread above");
+    expect(vi.mocked(client.beta.messages.create).mock.calls[0]?.[1]).toEqual({ maxRetries: 0 });
+  });
+
+  it("draftReply sends the draft prompt with thread and owner preferences", async () => {
+    const client = fakeClient(() => textResponse({ body: "Hi Ada,\r\n\r\nYes.  " }));
+    const result = await createAnthropicProvider({ client: () => client }).draftReply(
+      opusCtx,
+      draftInput,
+    );
+    expect(result).toEqual({ body: "Hi Ada,\n\nYes." });
+    const params = paramsOf(client);
+    expect(params.output_config).toMatchObject({ effort: "medium" });
+    expect(params.max_tokens).toBe(8192);
+    expect(params).not.toHaveProperty("tools");
+    expect(params).not.toHaveProperty("thinking");
+    expect(params.system).toEqual([
+      expect.objectContaining({ text: DRAFT_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }),
+    ]);
+    const content = (params.messages as Array<{ content: string }>)[0]?.content ?? "";
+    expect(content).toContain("<email_thread");
+    expect(content).toContain("<owner_preferences");
+    expect(JSON.stringify(params.system)).not.toContain("Say yes");
+    expect(vi.mocked(client.beta.messages.create).mock.calls[0]?.[1]).toEqual({ maxRetries: 0 });
+  });
+
+  it("sends the fallback only for Opus", async () => {
+    const haiku = { apiKey: "k", model: "claude-haiku-5-5", onUsage: () => {} };
+    const a = fakeClient(() => textResponse({ summary: "s" }));
+    await createAnthropicProvider({ client: () => a }).summarize(haiku, input);
+    expect(paramsOf(a)).not.toHaveProperty("fallbacks");
+    const b = fakeClient(() => textResponse({ body: "b" }));
+    await createAnthropicProvider({ client: () => b }).draftReply(haiku, draftInput);
+    expect(paramsOf(b)).not.toHaveProperty("fallbacks");
+    const c = fakeClient(() => textResponse({ body: "b" }));
+    await createAnthropicProvider({ client: () => c }).draftReply(opusCtx, draftInput);
+    expect(paramsOf(c).fallbacks).toBe("default");
+  });
+
+  it("records usage then throws AiRefusalError on refusal", async () => {
+    const onUsage = vi.fn();
+    const provider = createAnthropicProvider({
+      client: () => fakeClient(() => ({ ...ok, stop_reason: "refusal", content: [] })),
+    });
+    await expect(provider.summarize({ ...opusCtx, onUsage }, input)).rejects.toBeInstanceOf(
+      AiRefusalError,
+    );
+    await expect(provider.draftReply({ ...opusCtx, onUsage }, draftInput)).rejects.toBeInstanceOf(
+      AiRefusalError,
+    );
+    expect(onUsage).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws AiOutputError for an empty summary", async () => {
+    const provider = createAnthropicProvider({
+      client: () => fakeClient(() => textResponse({ summary: "  " })),
+    });
+    await expect(provider.summarize(opusCtx, input)).rejects.toBeInstanceOf(AiOutputError);
   });
 });
 

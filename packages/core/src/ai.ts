@@ -39,6 +39,19 @@ export function isClassificationModel(id: string): id is ClassificationModelId {
   return CLASSIFICATION_MODELS.some((m) => m.id === id);
 }
 
+export const REPLY_TONE_META: Readonly<Record<ReplyTone, { label: string; description: string }>> =
+  {
+    professional: { label: "Professional", description: "Clear, courteous and to the point." },
+    friendly: { label: "Friendly", description: "Warm and personable." },
+    concise: { label: "Concise", description: "As short as possible while complete." },
+    formal: { label: "Formal", description: "Polished and respectful; no contractions." },
+    casual: { label: "Casual", description: "Relaxed and conversational." },
+  };
+
+/** Models offered for any AI task (same catalog as classification). */
+export const AI_MODELS = CLASSIFICATION_MODELS;
+export const isAiModel = isClassificationModel;
+
 /** Approximate USD cost of a usage record; null for models without a known price. */
 export function estimateCostUsd(
   model: string,

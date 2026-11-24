@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { CLASSIFICATION_MODELS, estimateCostUsd, isClassificationModel } from "./ai";
+import {
+  CLASSIFICATION_MODELS,
+  estimateCostUsd,
+  isClassificationModel,
+  REPLY_TONE_META,
+  REPLY_TONES,
+} from "./ai";
+
+describe("reply tones", () => {
+  it("has metadata for every tone", () => {
+    for (const tone of REPLY_TONES) {
+      expect(REPLY_TONE_META[tone].label).toBeTruthy();
+      expect(REPLY_TONE_META[tone].description).toBeTruthy();
+    }
+    expect(Object.keys(REPLY_TONE_META).sort()).toEqual([...REPLY_TONES].sort());
+  });
+});
 
 describe("classification models", () => {
   it("offers Opus 5.5 first and Haiku 5.5", () => {

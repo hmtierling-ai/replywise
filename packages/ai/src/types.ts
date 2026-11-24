@@ -1,4 +1,4 @@
-import type { AiProviderId, EmailAddress } from "@replywise/core";
+import type { AiProviderId, EmailAddress, ReplyTone } from "@replywise/core";
 
 export interface AiUsage {
   inputTokens: number;
@@ -37,10 +37,29 @@ export interface ClassifyResult {
   reasons: string[];
 }
 
+export type SummarizeInput = ClassifyInput;
+
+export interface SummaryResult {
+  summary: string;
+}
+
+export type DraftReplyInput = ClassifyInput & {
+  tone: ReplyTone;
+  instructions: string | null;
+  writingStyleNotes: string;
+  replyLanguage: string | null;
+};
+
+export interface DraftReplyResult {
+  body: string;
+}
+
 export type KeyValidation = { ok: true } | { ok: false; reason: "invalid" | "unreachable" };
 
 export interface AiProvider {
   readonly id: AiProviderId;
   validateKey(apiKey: string): Promise<KeyValidation>;
   classify(ctx: AiContext, input: ClassifyInput): Promise<ClassifyResult>;
+  summarize(ctx: AiContext, input: SummarizeInput): Promise<SummaryResult>;
+  draftReply(ctx: AiContext, input: DraftReplyInput): Promise<DraftReplyResult>;
 }
