@@ -9,6 +9,7 @@ import {
   insertAuditLog,
   markDraftSaved,
   recordProviderDraftId,
+  SAVE_STALE_MS,
 } from "@replywise/db";
 import {
   buildReplyMime,
@@ -59,6 +60,11 @@ export function saveDraftHandler(deps: SaveDraftDeps) {
 async function save(deps: SaveDraftDeps, draftId: string, context: JobContext): Promise<void> {
   const draft = await getDraftForWorker(deps.db, draftId);
   if (!draft || !SAVEABLE.has(draft.status) || !draft.saveRequestedAt) return;
+  // A stale request no longer blocks a new one, so acting on it could race a newer save.
+  if (Date.now() - draft.saveRequestedAt.getTime() > SAVE_STALE_MS) {
+    deps.logger.info({ draftId }, "stale save request skipped");
+    return;
+  }
   const source = await getThreadForClassification(deps.db, draft.threadId);
   if (!source) return; // the thread (and its drafts) went away
 
@@ -67,7 +73,8 @@ async function save(deps: SaveDraftDeps, draftId: string, context: JobContext): 
 
   /** Fails the save with a fixed code and stops retries. */
   const giveUp = async (error: unknown): Promise<never> => {
-    await failDraftSave(deps.db, draftId, errorCode(error));
+    // Best effort: a DB error here must not become retryable and re-run createDraft.
+    await failDraftSave(deps.db, draftId, errorCode(error)).catch(() => undefined);
     deps.logger.warn(
       { threadId: source.thread.id, draftId, error: safeErrorFields(error) },
       "draft save failed",

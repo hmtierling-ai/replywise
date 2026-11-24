@@ -1,5 +1,5 @@
 import { type AiProviderId, DEFAULT_AI_MODELS, type ReplyTone } from "@replywise/core";
-import { and, desc, eq, isNull, ne, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import type { DbExecutor } from "../client";
 import { replyDrafts, threadSummaries, userPreferences } from "../schema/ai";
 import { mailAccounts, threads } from "../schema/mail";
@@ -29,7 +29,7 @@ export async function requestSummary(db: DbExecutor, threadId: string): Promise<
     });
 }
 
-/** Worker-only (trusted ids). */
+/** Worker-only (trusted ids). Only acts on a pending summary. */
 export async function completeSummary(
   db: DbExecutor,
   input: { threadId: string; summary: string; throughMessageId: string; model: string },
@@ -44,15 +44,20 @@ export async function completeSummary(
       error: null,
       updatedAt: new Date(),
     })
-    .where(eq(threadSummaries.threadId, input.threadId));
+    .where(
+      and(eq(threadSummaries.threadId, input.threadId), eq(threadSummaries.status, "pending")),
+    );
 }
 
-/** Worker-only (trusted ids). */
+/**
+ * Worker-only (trusted ids). Only acts on a pending summary, so a best-effort failure write can
+ * never flip a ready summary to failed.
+ */
 export async function failSummary(db: DbExecutor, threadId: string, error: string): Promise<void> {
   await db
     .update(threadSummaries)
     .set({ status: "failed", error, updatedAt: new Date() })
-    .where(eq(threadSummaries.threadId, threadId));
+    .where(and(eq(threadSummaries.threadId, threadId), eq(threadSummaries.status, "pending")));
 }
 
 /** Worker-only (trusted ids). Not user-scoped: callers must verify thread ownership first. */
@@ -173,29 +178,47 @@ export async function listDraftsForThread(
 
 const EDITABLE = sql`${replyDrafts.status} in ('generated', 'edited', 'saved')`;
 
-/** Rejected (false) while a save to Gmail is in flight. */
+/**
+ * A save request older than this is treated as abandoned (lost enqueue, stalled job, failed
+ * cleanup): it no longer blocks edits or new requests, and the worker will not act on it.
+ */
+export const SAVE_STALE_MS = 10 * 60 * 1000;
+
+/** No save in flight: never requested, or the request is stale. */
+function noSaveInFlight(now: Date) {
+  return or(
+    isNull(replyDrafts.saveRequestedAt),
+    lt(replyDrafts.saveRequestedAt, new Date(now.getTime() - SAVE_STALE_MS)),
+  );
+}
+
+/** Rejected (false) while a (non-stale) save to Gmail is in flight. */
 export async function updateDraftBody(
   db: DbExecutor,
   userId: string,
   draftId: string,
   bodyCiphertext: Buffer,
+  now: Date = new Date(),
 ): Promise<boolean> {
   const rows = await db
     .update(replyDrafts)
-    .set({ bodyCiphertext, status: "edited", updatedAt: new Date() })
+    .set({ bodyCiphertext, status: "edited", updatedAt: now })
     .where(
       and(
         eq(replyDrafts.id, draftId),
         eq(replyDrafts.userId, userId),
         EDITABLE,
-        isNull(replyDrafts.saveRequestedAt),
+        noSaveInFlight(now),
       ),
     )
     .returning({ id: replyDrafts.id });
   return rows.length > 0;
 }
 
-/** Refused (false) while an earlier save is still in flight, so one draft never saves twice at once. */
+/**
+ * Refused (false) while an earlier, non-stale save is still in flight, so one draft never saves
+ * twice at once. Enqueue `draft.save` only on true.
+ */
 export async function requestDraftSave(
   db: DbExecutor,
   userId: string,
@@ -210,7 +233,7 @@ export async function requestDraftSave(
         eq(replyDrafts.id, draftId),
         eq(replyDrafts.userId, userId),
         EDITABLE,
-        isNull(replyDrafts.saveRequestedAt),
+        noSaveInFlight(now),
       ),
     )
     .returning({ id: replyDrafts.id });

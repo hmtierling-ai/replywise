@@ -14,6 +14,7 @@ import {
   replyDrafts,
   requestDraftSave,
   requestSummary,
+  SAVE_STALE_MS,
   saveAiCredential,
   setAutoDraft,
   setWritingPreferences,
@@ -490,6 +491,18 @@ describe("saveDraftHandler", () => {
       saveRequestedAt: null,
       error: "gmail_unavailable",
     });
+  });
+
+  it("does not act on a stale save request", async () => {
+    const { db } = handle;
+    const s = await seed();
+    const draftId = await generatedDraft(s);
+    await requestDraftSave(db, s.user.id, draftId, new Date(Date.now() - SAVE_STALE_MS - 1000));
+    const gmail = fakeGmailDrafts();
+    await saveDraftHandler(saveDeps(gmail.factory))({ draftId }, ctx);
+    expect(gmail.calls.tokens).toHaveLength(0);
+    expect(gmail.calls.create).toHaveLength(0);
+    expect((await getDraftForWorker(db, draftId))?.status).toBe("generated");
   });
 
   it("retries a rate-limited create and keeps the save requested", async () => {

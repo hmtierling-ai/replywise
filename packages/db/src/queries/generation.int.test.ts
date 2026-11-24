@@ -26,6 +26,7 @@ import {
   recordProviderDraftId,
   requestDraftSave,
   requestSummary,
+  SAVE_STALE_MS,
   setAutoDraft,
   setWritingPreferences,
   threadBelongsToUser,
@@ -88,6 +89,29 @@ describe("summaries", () => {
     expect(await getSummary(db, thread.id)).toMatchObject({
       status: "failed",
       error: "ai_unavailable",
+    });
+  });
+
+  it("completeSummary and failSummary only act on pending summaries", async () => {
+    const { thread, message } = await seedThread();
+    const done = { threadId: thread.id, throughMessageId: message.id, model: "claude-opus-5-5" };
+    await requestSummary(db, thread.id);
+    await completeSummary(db, { ...done, summary: "First." });
+    await failSummary(db, thread.id, "internal");
+    expect(await getSummary(db, thread.id)).toMatchObject({
+      status: "ready",
+      summary: "First.",
+      error: null,
+    });
+    await completeSummary(db, { ...done, summary: "Second." });
+    expect((await getSummary(db, thread.id))?.summary).toBe("First.");
+
+    await requestSummary(db, thread.id);
+    await failSummary(db, thread.id, "ai_refused");
+    await completeSummary(db, { ...done, summary: "Third." });
+    expect(await getSummary(db, thread.id)).toMatchObject({
+      status: "failed",
+      error: "ai_refused",
     });
   });
 });
@@ -221,6 +245,26 @@ describe("draft state guards", () => {
     expect(await requestDraftSave(db, alice.id, id, new Date())).toBe(false);
     await failDraftSave(db, id, "gmail_unavailable");
     expect(await requestDraftSave(db, alice.id, id, new Date())).toBe(true);
+  });
+
+  it("lets a stale save request (older than SAVE_STALE_MS) be replaced, and unblocks edits", async () => {
+    const { alice, thread } = await seedThread();
+    const id = await newDraft(alice.id, thread.id, null);
+    await completeDraft(db, { draftId: id, ...body("b1") });
+    const t0 = new Date("2026-11-24T12:00:00Z");
+    const fresh = new Date(t0.getTime() + SAVE_STALE_MS - 1000);
+    const stale = new Date(t0.getTime() + SAVE_STALE_MS + 1000);
+    expect(await requestDraftSave(db, alice.id, id, t0)).toBe(true);
+    // Fresh in-flight request: a second request and edits are refused.
+    expect(await requestDraftSave(db, alice.id, id, fresh)).toBe(false);
+    expect(await updateDraftBody(db, alice.id, id, Buffer.from("x"), fresh)).toBe(false);
+    // Older than 10 minutes: edits and a new request go through.
+    expect(await updateDraftBody(db, alice.id, id, Buffer.from("b2"), stale)).toBe(true);
+    expect(await requestDraftSave(db, alice.id, id, stale)).toBe(true);
+    expect((await getDraftForUser(db, alice.id, id))?.saveRequestedAt).toEqual(stale);
+    // The new request is fresh again and blocks.
+    expect(await requestDraftSave(db, alice.id, id, stale)).toBe(false);
+    expect(await updateDraftBody(db, alice.id, id, Buffer.from("y"), stale)).toBe(false);
   });
 
   it("recordProviderDraftId keeps only the Gmail draft id", async () => {
