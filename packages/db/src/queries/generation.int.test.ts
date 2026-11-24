@@ -156,7 +156,107 @@ describe("reply drafts", () => {
   });
 });
 
+describe("draft state guards", () => {
+  const body = (s: string) => ({ bodyCiphertext: Buffer.from(s), model: "claude-opus-5-5" });
+
+  it("completeDraft and failDraft only act on pending drafts", async () => {
+    const { alice, thread } = await seedThread();
+    const id = await newDraft(alice.id, thread.id, null);
+    await completeDraft(db, { draftId: id, ...body("b1") });
+    await failDraft(db, id, "ai_refused");
+    await completeDraft(db, { draftId: id, ...body("b2") });
+    const row = await getDraftForUser(db, alice.id, id);
+    expect(row).toMatchObject({ status: "generated", error: null });
+    expect(row?.bodyCiphertext.toString()).toBe("b1");
+  });
+
+  it("discarding a pending draft keeps a later completeDraft from reviving it", async () => {
+    const { alice, thread } = await seedThread();
+    const id = await newDraft(alice.id, thread.id, null);
+    expect(await discardDraft(db, alice.id, id)).toBe(true);
+    await completeDraft(db, { draftId: id, ...body("b1") });
+    expect((await getDraftForUser(db, alice.id, id))?.status).toBe("discarded");
+  });
+
+  it("rejects edits and save requests on pending, failed and discarded drafts", async () => {
+    const { alice, thread } = await seedThread();
+    const pending = await newDraft(alice.id, thread.id, null);
+    const failed = await newDraft(alice.id, thread.id, null);
+    await failDraft(db, failed, "ai_refused");
+    const discarded = await newDraft(alice.id, thread.id, null);
+    await discardDraft(db, alice.id, discarded);
+    for (const id of [pending, failed, discarded]) {
+      expect(await updateDraftBody(db, alice.id, id, Buffer.from("x"))).toBe(false);
+      expect(await requestDraftSave(db, alice.id, id, new Date())).toBe(false);
+    }
+  });
+
+  it("markDraftSaved and failDraftSave leave a draft discarded during an in-flight save alone", async () => {
+    const { alice, thread } = await seedThread();
+    const id = await newDraft(alice.id, thread.id, null);
+    await completeDraft(db, { draftId: id, ...body("b1") });
+    await requestDraftSave(db, alice.id, id, new Date());
+    await discardDraft(db, alice.id, id);
+    await markDraftSaved(db, id, "r-1", new Date());
+    expect(await getDraftForUser(db, alice.id, id)).toMatchObject({
+      status: "discarded",
+      providerDraftId: null,
+    });
+    await failDraftSave(db, id, "gmail_unavailable");
+    expect(await getDraftForUser(db, alice.id, id)).toMatchObject({
+      status: "discarded",
+      error: null,
+    });
+  });
+
+  it("rejects edits while a save is in flight", async () => {
+    const { alice, thread } = await seedThread();
+    const id = await newDraft(alice.id, thread.id, null);
+    await completeDraft(db, { draftId: id, ...body("b1") });
+    await requestDraftSave(db, alice.id, id, new Date());
+    expect(await updateDraftBody(db, alice.id, id, Buffer.from("x"))).toBe(false);
+    expect((await getDraftForUser(db, alice.id, id))?.bodyCiphertext.toString()).toBe("b1");
+  });
+
+  it("does not let another user save-request or discard a draft", async () => {
+    const { alice, bob, thread } = await seedThread({ withBob: true });
+    const id = await newDraft(alice.id, thread.id, null);
+    await completeDraft(db, { draftId: id, ...body("b1") });
+    expect(await requestDraftSave(db, bob.id, id, new Date())).toBe(false);
+    expect(await discardDraft(db, bob.id, id)).toBe(false);
+    expect(await getDraftForUser(db, alice.id, id)).toMatchObject({
+      status: "generated",
+      saveRequestedAt: null,
+    });
+  });
+
+  it("refuses to create a draft on a thread the user does not own", async () => {
+    const { bob, thread } = await seedThread({ withBob: true });
+    await expect(newDraft(bob.id, thread.id, null)).rejects.toThrow("thread_not_owned");
+    expect(await listDraftsForThread(db, bob.id, thread.id)).toEqual([]);
+  });
+
+  it("hasDraftForMessage ignores failed drafts so auto-draft can retry", async () => {
+    const { alice, thread, message } = await seedThread();
+    const id = await newDraft(alice.id, thread.id, message.id);
+    expect(await hasDraftForMessage(db, thread.id, message.id)).toBe(true);
+    await failDraft(db, id, "ai_refused");
+    expect(await hasDraftForMessage(db, thread.id, message.id)).toBe(false);
+  });
+});
+
 describe("writing preferences and auto-draft", () => {
+  it("updates existing preferences and can reset replyLanguage to null", async () => {
+    const { alice } = await seedThread();
+    await setWritingPreferences(db, alice.id, { replyLanguage: "pt" });
+    expect((await getWritingPreferences(db, alice.id)).replyLanguage).toBe("pt");
+    await setWritingPreferences(db, alice.id, { signature: "Ada", replyLanguage: null });
+    expect(await getWritingPreferences(db, alice.id)).toMatchObject({
+      signature: "Ada",
+      replyLanguage: null,
+    });
+  });
+
   it("defaults, then stores writing preferences", async () => {
     const { alice } = await seedThread();
     expect(await getWritingPreferences(db, alice.id)).toEqual({

@@ -319,6 +319,33 @@ describe("insights, classification source and usage", () => {
     expect(await getThreadInsight(db, other.id)).toMatchObject({ needsReply: true });
   });
 
+  it("writes the insight when the user's message is older than the classified one", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    const thread = await insertThread(db, box.id, { providerLabels: ["INBOX"] });
+    await insertMessage(db, thread.id, box.id, {
+      sentAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
+      isFromUser: true,
+    });
+    const base = await insertMessage(db, thread.id, box.id, {
+      sentAt: new Date(now.getTime() - 60 * 60 * 1000),
+      isFromUser: false,
+    });
+    await upsertThreadInsight(db, {
+      threadId: thread.id,
+      category: "needs_reply",
+      urgency: 3,
+      importance: 3,
+      needsReply: true,
+      reasons: ["Asks a question."],
+      classifiedThroughMessageId: base.id,
+      aiProvider: "anthropic",
+      model: "claude-opus-5-5",
+      promptVersion: "classify-v1",
+    });
+    expect(await getThreadInsight(db, thread.id)).toMatchObject({ needsReply: true });
+  });
+
   it("markThreadAnswered clears needs_reply with a category matching deriveCategory", async () => {
     const alice = await insertUser(db);
     const box = await insertMailAccount(db, alice.id);

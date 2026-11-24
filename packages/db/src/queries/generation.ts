@@ -1,5 +1,5 @@
 import { type AiProviderId, DEFAULT_AI_MODELS, type ReplyTone } from "@replywise/core";
-import { and, desc, eq, ne, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, notInArray, sql } from "drizzle-orm";
 import type { DbExecutor } from "../client";
 import { replyDrafts, threadSummaries, userPreferences } from "../schema/ai";
 import { mailAccounts, threads } from "../schema/mail";
@@ -14,7 +14,10 @@ export interface ThreadSummary {
   updatedAt: Date;
 }
 
-/** Marks a summary as pending (keeps the previous text so the UI can show it while refreshing). */
+/**
+ * Worker-only (trusted ids): callers must verify thread ownership first.
+ * Marks a summary as pending (keeps the previous text so the UI can show it while refreshing).
+ */
 export async function requestSummary(db: DbExecutor, threadId: string): Promise<void> {
   const now = new Date();
   await db
@@ -26,6 +29,7 @@ export async function requestSummary(db: DbExecutor, threadId: string): Promise<
     });
 }
 
+/** Worker-only (trusted ids). */
 export async function completeSummary(
   db: DbExecutor,
   input: { threadId: string; summary: string; throughMessageId: string; model: string },
@@ -43,6 +47,7 @@ export async function completeSummary(
     .where(eq(threadSummaries.threadId, input.threadId));
 }
 
+/** Worker-only (trusted ids). */
 export async function failSummary(db: DbExecutor, threadId: string, error: string): Promise<void> {
   await db
     .update(threadSummaries)
@@ -50,7 +55,7 @@ export async function failSummary(db: DbExecutor, threadId: string, error: strin
     .where(eq(threadSummaries.threadId, threadId));
 }
 
-/** Not user-scoped: call after verifying thread ownership. */
+/** Worker-only (trusted ids). Not user-scoped: callers must verify thread ownership first. */
 export async function getSummary(db: DbExecutor, threadId: string): Promise<ThreadSummary | null> {
   const [row] = await db
     .select({
@@ -69,6 +74,10 @@ export async function getSummary(db: DbExecutor, threadId: string): Promise<Thre
 
 export type DraftRow = typeof replyDrafts.$inferSelect;
 
+/**
+ * Throws `thread_not_owned` when the thread does not belong to `userId`. `forMessageId` must
+ * belong to the same thread (not validated here).
+ */
 export async function createPendingDraft(
   db: DbExecutor,
   input: {
@@ -83,21 +92,22 @@ export async function createPendingDraft(
     model: string;
   },
 ): Promise<string> {
-  const [row] = await db
-    .insert(replyDrafts)
-    .values({
-      threadId: input.threadId,
-      userId: input.userId,
-      tone: input.tone,
-      instructions: input.instructions,
-      forMessageId: input.forMessageId,
-      bodyCiphertext: input.placeholderCiphertext,
-      status: "pending",
-      aiProvider: input.aiProvider,
-      model: input.model,
-    })
-    .returning({ id: replyDrafts.id });
-  if (!row) throw new Error("createPendingDraft failed");
+  // Insert only when the thread belongs to input.userId (single statement, no check-then-act).
+  const rows = await db.execute<{ id: string }>(sql`
+    insert into reply_drafts
+      (thread_id, user_id, tone, instructions, for_message_id, body_ciphertext, status, ai_provider, model)
+    select ${input.threadId}::uuid, ${input.userId}, ${input.tone}::reply_tone, ${input.instructions},
+      ${input.forMessageId}::uuid, ${input.placeholderCiphertext}::bytea, 'pending'::draft_status,
+      ${input.aiProvider}::ai_provider, ${input.model}
+    where exists (
+      select 1 from ${threads} t
+      join ${mailAccounts} ma on ma.id = t.mail_account_id
+      where t.id = ${input.threadId}::uuid and ma.user_id = ${input.userId}
+    )
+    returning id
+  `);
+  const row = [...rows][0];
+  if (!row) throw new Error("thread_not_owned");
   return row.id;
 }
 
@@ -124,7 +134,7 @@ export async function failDraft(db: DbExecutor, draftId: string, error: string):
     .where(and(eq(replyDrafts.id, draftId), eq(replyDrafts.status, "pending")));
 }
 
-/** Worker-only (trusted id). */
+/** Worker-only (trusted ids): not user-scoped. */
 export async function getDraftForWorker(db: DbExecutor, draftId: string): Promise<DraftRow | null> {
   const [row] = await db.select().from(replyDrafts).where(eq(replyDrafts.id, draftId));
   return row ?? null;
@@ -163,6 +173,7 @@ export async function listDraftsForThread(
 
 const EDITABLE = sql`${replyDrafts.status} in ('generated', 'edited', 'saved')`;
 
+/** Rejected (false) while a save to Gmail is in flight. */
 export async function updateDraftBody(
   db: DbExecutor,
   userId: string,
@@ -172,7 +183,14 @@ export async function updateDraftBody(
   const rows = await db
     .update(replyDrafts)
     .set({ bodyCiphertext, status: "edited", updatedAt: new Date() })
-    .where(and(eq(replyDrafts.id, draftId), eq(replyDrafts.userId, userId), EDITABLE))
+    .where(
+      and(
+        eq(replyDrafts.id, draftId),
+        eq(replyDrafts.userId, userId),
+        EDITABLE,
+        isNull(replyDrafts.saveRequestedAt),
+      ),
+    )
     .returning({ id: replyDrafts.id });
   return rows.length > 0;
 }
@@ -207,16 +225,17 @@ export async function markDraftSaved(
       error: null,
       updatedAt: savedAt,
     })
-    .where(eq(replyDrafts.id, draftId));
+    .where(and(eq(replyDrafts.id, draftId), EDITABLE));
 }
 
 export async function failDraftSave(db: DbExecutor, draftId: string, error: string): Promise<void> {
   await db
     .update(replyDrafts)
     .set({ saveRequestedAt: null, error, updatedAt: new Date() })
-    .where(eq(replyDrafts.id, draftId));
+    .where(and(eq(replyDrafts.id, draftId), EDITABLE));
 }
 
+/** Discarding a pending draft makes a later completeDraft a no-op. */
 export async function discardDraft(
   db: DbExecutor,
   userId: string,
@@ -230,7 +249,10 @@ export async function discardDraft(
   return rows.length > 0;
 }
 
-/** Auto-draft dedupe: any non-discarded draft answering this message. */
+/**
+ * Worker-only (trusted ids). Auto-draft dedupe: any draft answering this message that is not
+ * discarded or failed (failed ones may be retried).
+ */
 export async function hasDraftForMessage(
   db: DbExecutor,
   threadId: string,
@@ -243,7 +265,7 @@ export async function hasDraftForMessage(
       and(
         eq(replyDrafts.threadId, threadId),
         eq(replyDrafts.forMessageId, messageId),
-        ne(replyDrafts.status, "discarded"),
+        notInArray(replyDrafts.status, ["discarded", "failed"]),
       ),
     )
     .limit(1);
