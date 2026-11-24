@@ -5,6 +5,7 @@ import {
   getThreadInsight,
   getWritingPreferences,
   listDraftsForThread,
+  PENDING_STALE_MS,
   SAVE_STALE_MS,
 } from "@replywise/db";
 import { loadThreadForUser } from "@replywise/sync";
@@ -16,6 +17,7 @@ import { ThreadView } from "@/components/thread/thread-view";
 import { requireUser } from "@/lib/auth";
 import { getEncryptor } from "@/lib/crypto";
 import { getDb } from "@/lib/db";
+import { isOlderThan } from "@/lib/stale";
 import { getSyncDeps } from "@/lib/sync";
 
 export const metadata = { title: "Thread" };
@@ -45,30 +47,39 @@ async function ThreadContent({ params }: { params: PageProps<"/thread/[id]">["pa
       .map(async (d) => {
         const status = d.status as DraftView["status"];
         // Pending drafts hold a placeholder and failed drafts may too: never decrypt them.
-        const body =
-          status === "pending" || status === "failed"
-            ? null
-            : await encryptor.decryptString(d.bodyCiphertext, aad.replyDraft(d.id));
+        let body: string | null = null;
+        let unreadable = false;
+        if (status !== "pending" && status !== "failed") {
+          try {
+            body = await encryptor.decryptString(d.bodyCiphertext, aad.replyDraft(d.id));
+          } catch {
+            unreadable = true;
+          }
+        }
         return {
           id: d.id,
           status,
           body,
+          unreadable,
+          stuck: status === "pending" && isOlderThan(d.createdAt, now, PENDING_STALE_MS),
           error: d.error,
           providerDraftId: d.providerDraftId,
-          saving:
-            d.saveRequestedAt !== null &&
-            now.getTime() - d.saveRequestedAt.getTime() < SAVE_STALE_MS,
+          saving: d.saveRequestedAt !== null && !isOlderThan(d.saveRequestedAt, now, SAVE_STALE_MS),
           savedAt: d.savedAt,
         };
       }),
   );
+  const summaryStuck =
+    summary?.status === "pending" && isOlderThan(summary.requestedAt, now, PENDING_STALE_MS);
   const pending =
-    summary?.status === "pending" || drafts.some((d) => d.status === "pending" || d.saving);
+    (summary?.status === "pending" && !summaryStuck) ||
+    drafts.some((d) => (d.status === "pending" && !d.stuck) || d.saving);
   return (
     <ThreadView
       view={view}
       insight={insight}
       summary={summary}
+      summaryStuck={summaryStuck}
       drafts={drafts}
       defaultTone={prefs.defaultTone}
       hasValidKey={credential?.status === "valid"}

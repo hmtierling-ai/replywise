@@ -17,6 +17,10 @@ export interface DraftView {
   status: "pending" | "generated" | "edited" | "saved" | "failed";
   /** Decrypted body; null for pending and failed drafts. */
   body: string | null;
+  /** Decryption failed: show a discard-only message instead of the editor. */
+  unreadable: boolean;
+  /** Pending for longer than PENDING_STALE_MS. */
+  stuck: boolean;
   error: string | null;
   providerDraftId: string | null;
   /** A save to Gmail is in flight (requested and not stale). */
@@ -73,6 +77,18 @@ function GenerateForm({
   );
 }
 
+function DiscardForm({ draftId, threadId }: { draftId: string; threadId: string }) {
+  return (
+    <form action={discardDraftAction}>
+      <input type="hidden" name="draftId" value={draftId} />
+      <input type="hidden" name="threadId" value={threadId} />
+      <Button type="submit" size="sm" variant="ghost">
+        Discard
+      </Button>
+    </form>
+  );
+}
+
 function DraftItem({
   draft,
   threadId,
@@ -84,18 +100,29 @@ function DraftItem({
   mailboxEmail: string;
   now: Date;
 }) {
-  if (draft.status === "pending") {
+  if (draft.status === "pending" && !draft.stuck) {
     return (
-      <p role="status" className="text-sm font-medium">
-        Writing a reply…
-      </p>
+      <div className="flex flex-col items-start gap-2">
+        <p role="status" className="text-sm font-medium">
+          Writing a reply…
+        </p>
+        <DiscardForm draftId={draft.id} threadId={threadId} />
+      </div>
     );
   }
-  if (draft.status === "failed") {
+  if (draft.status === "pending" || draft.status === "failed" || draft.unreadable) {
+    const message = draft.unreadable
+      ? "This draft can't be read. Discard it and generate a new one."
+      : draft.status === "pending"
+        ? "Writing this reply took too long."
+        : generationError(draft.error ?? "internal");
     return (
-      <p role="alert" className="text-sm text-destructive">
-        {generationError(draft.error)}
-      </p>
+      <div className="flex flex-col items-start gap-2">
+        <p role="alert" className="text-sm text-destructive">
+          {message}
+        </p>
+        <DiscardForm draftId={draft.id} threadId={threadId} />
+      </div>
     );
   }
   return (
@@ -126,13 +153,19 @@ function DraftItem({
         <Button type="submit" size="sm" disabled={draft.saving} formAction={saveDraftToGmailAction}>
           {draft.providerDraftId ? "Update Gmail draft" : "Save to Gmail"}
         </Button>
-        <Button type="submit" size="sm" variant="ghost" formAction={discardDraftAction}>
+        <Button
+          type="submit"
+          size="sm"
+          variant="ghost"
+          disabled={draft.saving}
+          formAction={discardDraftAction}
+        >
           Discard
         </Button>
       </div>
       {draft.error ? (
         <p role="alert" className="text-sm text-destructive">
-          {generationError(draft.error)}
+          {generationError(draft.error ?? "internal")}
         </p>
       ) : null}
       <p className="text-xs text-muted-foreground">

@@ -1,11 +1,11 @@
 import "server-only";
-import { createJobQueue, createRedisConnection, type JobQueue } from "@replywise/queue";
+import { createJobQueue, createProducerConnection, type JobQueue } from "@replywise/queue";
 import { getEnv } from "./env";
 
 const globalForQueue = globalThis as unknown as { replywiseQueue?: JobQueue };
 
-/** One producer connection per process; survives dev hot reloads. Web only enqueues. */
+/** One producer connection per process; survives dev hot reloads. Web only enqueues and fails fast. */
 export function getQueue(): JobQueue {
-  globalForQueue.replywiseQueue ??= createJobQueue(createRedisConnection(getEnv().REDIS_URL));
+  globalForQueue.replywiseQueue ??= createJobQueue(createProducerConnection(getEnv().REDIS_URL));
   return globalForQueue.replywiseQueue;
 }

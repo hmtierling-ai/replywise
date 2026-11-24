@@ -1,5 +1,5 @@
 import { type AiProviderId, DEFAULT_AI_MODELS, type ReplyTone } from "@replywise/core";
-import { and, desc, eq, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import type { DbExecutor } from "../client";
 import { replyDrafts, threadSummaries, userPreferences } from "../schema/ai";
 import { mailAccounts, threads } from "../schema/mail";
@@ -18,15 +18,48 @@ export interface ThreadSummary {
  * Worker-only (trusted ids): callers must verify thread ownership first.
  * Marks a summary as pending (keeps the previous text so the UI can show it while refreshing).
  */
-export async function requestSummary(db: DbExecutor, threadId: string): Promise<void> {
-  const now = new Date();
-  await db
+export async function requestSummary(
+  db: DbExecutor,
+  threadId: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const cutoff = new Date(now.getTime() - PENDING_STALE_MS);
+  // Refused (false, nothing written) while a fresh pending request exists. Enqueue only on true.
+  const rows = await db
     .insert(threadSummaries)
     .values({ threadId, status: "pending", requestedAt: now })
     .onConflictDoUpdate({
       target: threadSummaries.threadId,
       set: { status: "pending", error: null, requestedAt: now, updatedAt: now },
-    });
+      setWhere: or(ne(threadSummaries.status, "pending"), lt(threadSummaries.requestedAt, cutoff)),
+    })
+    .returning({ threadId: threadSummaries.threadId });
+  return rows.length > 0;
+}
+
+/** A pending summary or draft older than this is treated as stuck: it no longer blocks retries. */
+export const PENDING_STALE_MS = 5 * 60 * 1000;
+
+/** True when a non-stale pending draft exists for this thread (user-scoped). */
+export async function hasFreshPendingDraft(
+  db: DbExecutor,
+  userId: string,
+  threadId: string,
+  now: Date,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: replyDrafts.id })
+    .from(replyDrafts)
+    .where(
+      and(
+        eq(replyDrafts.threadId, threadId),
+        eq(replyDrafts.userId, userId),
+        eq(replyDrafts.status, "pending"),
+        gte(replyDrafts.createdAt, new Date(now.getTime() - PENDING_STALE_MS)),
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
 }
 
 /** Worker-only (trusted ids). Only acts on a pending summary. */

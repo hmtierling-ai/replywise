@@ -18,6 +18,7 @@ export function ThreadView({
   view,
   insight,
   summary,
+  summaryStuck,
   drafts,
   defaultTone,
   hasValidKey,
@@ -27,6 +28,7 @@ export function ThreadView({
   view: ThreadViewData;
   insight: ThreadInsight | null;
   summary: ThreadSummary | null;
+  summaryStuck: boolean;
   drafts: DraftView[];
   defaultTone: ReplyTone;
   hasValidKey: boolean;
@@ -55,6 +57,7 @@ export function ThreadView({
       <SummaryPanel
         threadId={view.id}
         summary={summary}
+        stuck={summaryStuck}
         newestMessageId={view.messages.at(-1)?.id ?? null}
         hasValidKey={hasValidKey}
       />

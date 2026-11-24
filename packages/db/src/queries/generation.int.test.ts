@@ -21,8 +21,10 @@ import {
   getSummary,
   getWritingPreferences,
   hasDraftForMessage,
+  hasFreshPendingDraft,
   listDraftsForThread,
   markDraftSaved,
+  PENDING_STALE_MS,
   recordProviderDraftId,
   requestDraftSave,
   requestSummary,
@@ -90,6 +92,32 @@ describe("summaries", () => {
       status: "failed",
       error: "ai_unavailable",
     });
+  });
+
+  it("refuses a second request while pending is fresh, allows it once stale", async () => {
+    const { alice, thread } = await seedThread();
+    const t0 = new Date();
+    expect(await requestSummary(db, thread.id, t0)).toBe(true);
+    expect(await requestSummary(db, thread.id, new Date(t0.getTime() + 1000))).toBe(false);
+    expect(
+      await requestSummary(db, thread.id, new Date(t0.getTime() + PENDING_STALE_MS + 1000)),
+    ).toBe(true);
+    await failSummary(db, thread.id, "internal");
+    expect(await requestSummary(db, thread.id, new Date())).toBe(true);
+    expect(alice.id).toBeTruthy();
+  });
+
+  it("hasFreshPendingDraft is true only for a recent pending draft of the owner", async () => {
+    const { alice, bob, thread } = await seedThread({ withBob: true });
+    const now = new Date();
+    expect(await hasFreshPendingDraft(db, alice.id, thread.id, now)).toBe(false);
+    const id = await newDraft(alice.id, thread.id, null);
+    expect(await hasFreshPendingDraft(db, alice.id, thread.id, now)).toBe(true);
+    expect(await hasFreshPendingDraft(db, bob.id, thread.id, now)).toBe(false);
+    const later = new Date(now.getTime() + PENDING_STALE_MS + 60_000);
+    expect(await hasFreshPendingDraft(db, alice.id, thread.id, later)).toBe(false);
+    await failDraft(db, id, "internal");
+    expect(await hasFreshPendingDraft(db, alice.id, thread.id, now)).toBe(false);
   });
 
   it("completeSummary and failSummary only act on pending summaries", async () => {

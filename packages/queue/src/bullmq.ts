@@ -24,6 +24,18 @@ export function createRedisConnection(url: string): Redis {
   return new Redis(url, { maxRetriesPerRequest: null });
 }
 
+/**
+ * Producer-only (web) connection: fails fast when Redis is down instead of hanging the request.
+ * Do not use for workers, which need `createRedisConnection`.
+ */
+export function createProducerConnection(url: string): Redis {
+  return new Redis(url, {
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    connectTimeout: 5_000,
+  });
+}
+
 export function createJobQueue(connection: Redis, options: { prefix?: string } = {}): JobQueue {
   const queues = new Map<QueueName, Queue>();
   const queueFor = (name: QueueName): Queue => {

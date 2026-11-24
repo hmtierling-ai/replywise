@@ -5,9 +5,13 @@ import { aad } from "@replywise/crypto";
 import {
   createPendingDraft,
   discardDraft,
+  failDraft,
+  failDraftSave,
+  failSummary,
   getAiCredentialSummary,
   getDraftForUser,
   getWritingPreferences,
+  hasFreshPendingDraft,
   requestDraftSave,
   requestSummary,
   threadBelongsToUser,
@@ -45,12 +49,19 @@ export async function summarizeThreadAction(formData: FormData): Promise<void> {
   const user = await requireUser();
   const threadId = await ownedThread(user.id, formData);
   if (!threadId || !(await hasValidKey(user.id))) return;
-  await requestSummary(getDb(), threadId);
-  await getQueue().enqueue(
-    "thread.summarize",
-    { threadId },
-    { jobId: `summarize_${threadId}_${Date.now()}` },
-  );
+  const now = new Date();
+  // False while a fresh pending request exists: no second paid call.
+  if (await requestSummary(getDb(), threadId, now)) {
+    try {
+      await getQueue().enqueue(
+        "thread.summarize",
+        { threadId },
+        { jobId: `summarize_${threadId}_${now.getTime()}` },
+      );
+    } catch {
+      await failSummary(getDb(), threadId, "internal");
+    }
+  }
   revalidatePath(`/thread/${threadId}`);
 }
 
@@ -58,6 +69,7 @@ export async function generateDraftAction(formData: FormData): Promise<void> {
   const user = await requireUser();
   const threadId = await ownedThread(user.id, formData);
   if (!threadId || !(await hasValidKey(user.id))) return;
+  if (await hasFreshPendingDraft(getDb(), user.id, threadId, new Date())) return;
   const prefs = await getWritingPreferences(getDb(), user.id);
   const toneValue = field(formData, "tone");
   const tone: ReplyTone = (REPLY_TONES as readonly string[]).includes(toneValue)
@@ -82,7 +94,11 @@ export async function generateDraftAction(formData: FormData): Promise<void> {
     if (error instanceof Error && error.message === "thread_not_owned") return;
     throw error;
   }
-  await getQueue().enqueue("draft.generate", { draftId }, { jobId: `draft_${draftId}` });
+  try {
+    await getQueue().enqueue("draft.generate", { draftId }, { jobId: `draft_${draftId}` });
+  } catch {
+    await failDraft(getDb(), draftId, "internal");
+  }
   revalidatePath(`/thread/${threadId}`);
 }
 
@@ -91,6 +107,8 @@ export async function saveDraftEditAction(formData: FormData): Promise<void> {
   const threadId = await ownedThread(user.id, formData);
   const draftId = field(formData, "draftId");
   if (!threadId || !UUID.test(draftId)) return;
+  const draft = await getDraftForUser(getDb(), user.id, draftId);
+  if (!draft || draft.threadId !== threadId) return;
   const body = normalizeBody(field(formData, "body"));
   if (!body.trim()) return;
   await updateDraftBody(
@@ -127,11 +145,15 @@ export async function saveDraftToGmailAction(formData: FormData): Promise<void> 
   }
   const now = new Date();
   if (await requestDraftSave(getDb(), user.id, draftId, now)) {
-    await getQueue().enqueue(
-      "draft.save",
-      { draftId },
-      { jobId: `save_${draftId}_${now.getTime()}` },
-    );
+    try {
+      await getQueue().enqueue(
+        "draft.save",
+        { draftId },
+        { jobId: `save_${draftId}_${now.getTime()}` },
+      );
+    } catch {
+      await failDraftSave(getDb(), draftId, "internal");
+    }
   }
   revalidatePath(`/thread/${threadId}`);
 }
@@ -141,6 +163,8 @@ export async function discardDraftAction(formData: FormData): Promise<void> {
   const threadId = await ownedThread(user.id, formData);
   const draftId = field(formData, "draftId");
   if (!threadId || !UUID.test(draftId)) return;
+  const draft = await getDraftForUser(getDb(), user.id, draftId);
+  if (!draft || draft.threadId !== threadId) return;
   await discardDraft(getDb(), user.id, draftId);
   revalidatePath(`/thread/${threadId}`);
 }

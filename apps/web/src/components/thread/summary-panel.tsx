@@ -18,11 +18,14 @@ function SummarizeForm({ threadId, label }: { threadId: string; label: string })
 export function SummaryPanel({
   threadId,
   summary,
+  stuck,
   newestMessageId,
   hasValidKey,
 }: {
   threadId: string;
   summary: ThreadSummary | null;
+  /** Pending for longer than PENDING_STALE_MS: shown as failed so it can be retried. */
+  stuck: boolean;
   newestMessageId: string | null;
   hasValidKey: boolean;
 }) {
@@ -37,6 +40,15 @@ export function SummaryPanel({
   let content: React.ReactNode;
   if (!summary) {
     content = action("Summarize");
+  } else if (summary.status === "pending" && stuck) {
+    content = (
+      <div className="flex flex-col items-start gap-2">
+        <p role="alert" className="text-sm text-destructive">
+          Summarizing took too long.
+        </p>
+        {action("Try again")}
+      </div>
+    );
   } else if (summary.status === "pending") {
     content = (
       <>
@@ -54,7 +66,7 @@ export function SummaryPanel({
     content = (
       <div className="flex flex-col items-start gap-2">
         <p role="alert" className="text-sm text-destructive">
-          {generationError(summary.error)}
+          {generationError(summary.error ?? "internal")}
         </p>
         {action("Try again")}
       </div>
