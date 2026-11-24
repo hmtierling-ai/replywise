@@ -16,6 +16,7 @@ const nextConfig: NextConfig = {
     "@replywise/mail",
     "@replywise/mailbox",
     "@replywise/observability",
+    "@replywise/queue",
     "@replywise/sync",
   ],
   poweredByHeader: false,

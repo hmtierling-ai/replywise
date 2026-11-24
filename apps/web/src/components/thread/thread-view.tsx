@@ -1,9 +1,13 @@
-import type { ThreadInsight } from "@replywise/db";
+import type { ReplyTone } from "@replywise/core";
+import type { ThreadInsight, ThreadSummary } from "@replywise/db";
 import type { ThreadView as ThreadViewData } from "@replywise/sync";
 import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { LocalTime } from "@/components/local-time";
 import { InsightPanel } from "@/components/thread/insight-panel";
+import { PendingRefresher } from "@/components/thread/pending-refresher";
+import { type DraftView, ReplyComposer } from "@/components/thread/reply-composer";
+import { SummaryPanel } from "@/components/thread/summary-panel";
 import { buildEmailDocument, gmailThreadUrl, sanitizeEmailHtml } from "@/lib/email-html";
 import { formatThreadTime } from "@/lib/inbox-format";
 import { EmailFrame } from "./email-frame";
@@ -13,10 +17,20 @@ const name = (a: { name: string | null; address: string }) => a.name ?? a.addres
 export function ThreadView({
   view,
   insight,
+  summary,
+  drafts,
+  defaultTone,
+  hasValidKey,
+  pending,
   now,
 }: {
   view: ThreadViewData;
   insight: ThreadInsight | null;
+  summary: ThreadSummary | null;
+  drafts: DraftView[];
+  defaultTone: ReplyTone;
+  hasValidKey: boolean;
+  pending: boolean;
   now: Date;
 }) {
   return (
@@ -38,6 +52,13 @@ export function ThreadView({
         ) : null}
       </header>
       {insight ? <InsightPanel insight={insight} /> : null}
+      <SummaryPanel
+        threadId={view.id}
+        summary={summary}
+        newestMessageId={view.messages.at(-1)?.id ?? null}
+        hasValidKey={hasValidKey}
+      />
+      <PendingRefresher active={pending} />
       {view.bodiesUnavailable ? (
         <p
           role="status"
@@ -76,6 +97,14 @@ export function ThreadView({
           </li>
         ))}
       </ol>
+      <ReplyComposer
+        threadId={view.id}
+        drafts={drafts}
+        defaultTone={defaultTone}
+        hasValidKey={hasValidKey}
+        mailboxEmail={view.mailbox.emailAddress}
+        now={now}
+      />
     </article>
   );
 }

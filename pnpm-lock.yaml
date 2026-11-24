@@ -47,6 +47,9 @@ importers:
       '@replywise/mailbox':
         specifier: workspace:*
         version: link:../../packages/mailbox
+      '@replywise/queue':
+        specifier: workspace:*
+        version: link:../../packages/queue
       '@replywise/sync':
         specifier: workspace:*
         version: link:../../packages/sync

@@ -1,10 +1,20 @@
-import { getThreadInsight } from "@replywise/db";
+import { aad } from "@replywise/crypto";
+import {
+  getAiCredentialSummary,
+  getSummary,
+  getThreadInsight,
+  getWritingPreferences,
+  listDraftsForThread,
+  SAVE_STALE_MS,
+} from "@replywise/db";
 import { loadThreadForUser } from "@replywise/sync";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
+import type { DraftView } from "@/components/thread/reply-composer";
 import { ThreadView } from "@/components/thread/thread-view";
 import { requireUser } from "@/lib/auth";
+import { getEncryptor } from "@/lib/crypto";
 import { getDb } from "@/lib/db";
 import { getSyncDeps } from "@/lib/sync";
 
@@ -18,9 +28,54 @@ async function ThreadContent({ params }: { params: PageProps<"/thread/[id]">["pa
   if (!UUID.test(id)) notFound();
   const view = await loadThreadForUser(getSyncDeps(), user.id, id);
   if (!view) notFound();
-  const insight = await getThreadInsight(getDb(), view.id);
+  const db = getDb();
+  const [insight, summary, draftRows, prefs, credential] = await Promise.all([
+    getThreadInsight(db, view.id),
+    getSummary(db, view.id),
+    listDraftsForThread(db, user.id, view.id),
+    getWritingPreferences(db, user.id),
+    getAiCredentialSummary(db, user.id),
+  ]);
   await connection();
-  return <ThreadView view={view} insight={insight} now={new Date()} />;
+  const now = new Date();
+  const encryptor = getEncryptor();
+  const drafts: DraftView[] = await Promise.all(
+    draftRows
+      .filter((d) => d.status !== "discarded")
+      .map(async (d) => {
+        const status = d.status as DraftView["status"];
+        // Pending drafts hold a placeholder and failed drafts may too: never decrypt them.
+        const body =
+          status === "pending" || status === "failed"
+            ? null
+            : await encryptor.decryptString(d.bodyCiphertext, aad.replyDraft(d.id));
+        return {
+          id: d.id,
+          status,
+          body,
+          error: d.error,
+          providerDraftId: d.providerDraftId,
+          saving:
+            d.saveRequestedAt !== null &&
+            now.getTime() - d.saveRequestedAt.getTime() < SAVE_STALE_MS,
+          savedAt: d.savedAt,
+        };
+      }),
+  );
+  const pending =
+    summary?.status === "pending" || drafts.some((d) => d.status === "pending" || d.saving);
+  return (
+    <ThreadView
+      view={view}
+      insight={insight}
+      summary={summary}
+      drafts={drafts}
+      defaultTone={prefs.defaultTone}
+      hasValidKey={credential?.status === "valid"}
+      pending={pending}
+      now={now}
+    />
+  );
 }
 
 export default function ThreadPage({ params }: PageProps<"/thread/[id]">) {

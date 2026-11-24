@@ -19,6 +19,7 @@
     "@replywise/db": "workspace:*",
     "@replywise/mail": "workspace:*",
     "@replywise/mailbox": "workspace:*",
+    "@replywise/queue": "workspace:*",
     "@replywise/sync": "workspace:*",
     "better-auth": "^1.7.25",
     "class-variance-authority": "^0.7.1",
