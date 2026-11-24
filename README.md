@@ -93,3 +93,11 @@ The worker scans every minute for inbox threads whose newest message arrived in 
 - Email content is sent to Anthropic only for classification, as untrusted data with no tools; Replywise never sends email.
 
 The worker needs no extra environment variables; keys are per user.
+
+## Summaries and reply drafts
+
+Open a thread and click **Summarize** for a short AI summary, or choose a tone, add optional instructions and click **Generate reply**. Edit the reply, **Regenerate** it, and click **Save to Gmail**: Replywise creates (or updates) a draft in the same Gmail conversation, with your signature appended. **Replywise never sends email** — open the draft in Gmail to review and send it yourself.
+
+- Writing preferences (default tone, reply model, signature, style notes, reply language) live in Settings → AI.
+- Settings → Mailboxes has an optional per-mailbox **auto-draft for Needs Reply** (off by default): when new mail is classified as needing a reply, Replywise writes a draft in the app with your key; it reaches Gmail only when you click Save.
+- Summaries and replies run in the worker with your key (Opus 5.5 at medium effort by default; Haiku 5.5 is cheaper). Usage appears in Settings → AI.

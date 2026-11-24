@@ -73,3 +73,20 @@ The final whole-branch review verdict was "ready to merge with fixes"; the fixes
 - Answered threads: when the user's message is newest, sync clears needs_reply and recomputes the category without an AI call (SQL mirror of deriveCategory, parity-tested).
 - Categories on a mostly promotional mailbox came out 102 low_priority / 36 informational / 0 urgent-important-needs_reply (2026-11-24 real-key check); recalibrate deriveCategory thresholds or the prompt with person-to-person mail.
 - A 401/403 invalidates only the key version the job read (`updated_at` at ms precision), so a key saved meanwhile is not rejected. Key validation is one 10 s attempt; classify calls use no SDK retries (BullMQ's backoff is the only retry layer).
+
+## M5 decisions to revisit
+
+- Summaries live in `thread_summaries` (not `thread_insights.summary`) so unclassified threads can be summarized.
+- Replies go to the sender of the newest non-user message only (no reply-all, no Cc); the draft is threaded with In-Reply-To/References.
+- The signature is appended at save time, not stored in the draft body.
+- Pending UI is a 2-second `router.refresh()` poll for up to 3 minutes; no job-status API.
+- Pending drafts hold a placeholder ciphertext encrypted under `aad.replyDraft("pending")` (the draft id isn't known before insert); it is never decrypted.
+- Auto-draft only writes in the app; saving to Gmail is always a user click.
+- The M4 race (classification resurrecting needs_reply after the user's reply) is closed by an upsert guard.
+- No per-user rate limit on Summarize/Generate clicks yet (M6).
+- Gmail draft creation (POST) is retried only on Gmail rate limits; any other failure (timeout, 5xx, 4xx) fails the save so a retry can never create a duplicate draft — the user clicks Save again. Updates (PUT) are retried normally.
+- A save request older than 10 minutes (`SAVE_STALE_MS`) and a pending summary or draft older than 5 minutes (`PENDING_STALE_MS`) are treated as abandoned: they no longer block new requests and render as retryable.
+- One in-flight summary and one in-flight generated draft per thread; repeated clicks while one is fresh are ignored (no duplicate paid calls).
+- Reply recipients are validated strictly (ASCII local@domain); internationalised addresses are refused with 'There is no message from someone else to reply to.' rather than risk header injection.
+- The reply MIME module is `packages/mail/src/mime/replyMime.ts` (not `reply.ts`) because the no-send guard rejects `/reply` paths.
+- Deferred: a Redis outage at web cold start can still hang an enqueue until the 5-minute stale window; per-user rate limits on Summarize/Generate remain M6.
