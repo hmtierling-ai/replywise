@@ -1,5 +1,17 @@
+import { deriveCategory } from "@replywise/core";
 import { aad } from "@replywise/crypto";
-import { type Db, mailAccounts, messages, threads, userPreferences } from "@replywise/db";
+import {
+  type Db,
+  getThreadInsight,
+  listInboxThreads,
+  listThreadsPendingClassification,
+  mailAccounts,
+  messages,
+  saveAiCredential,
+  threads,
+  upsertThreadInsight,
+  userPreferences,
+} from "@replywise/db";
 import { insertMailAccount, insertUser, resetTestDb, setupTestDb } from "@replywise/db/testing";
 import { ProviderHttpError } from "@replywise/mail";
 import { completeConnect, startConnect } from "@replywise/mailbox";
@@ -208,6 +220,129 @@ describe("syncMailbox — incremental", () => {
       .from(mailAccounts)
       .where(eq(mailAccounts.id, mailAccountId));
     expect(account?.syncCursor).toBe("180");
+  });
+
+  it("clears Needs Reply without an AI call once the user's reply is the newest message", async () => {
+    const { base, userId, mailAccountId } = await connectedGmail();
+    const gmail = createFakeGmail({
+      historyId: "100",
+      threads: {
+        t1: [
+          fakeMessage({
+            providerMessageId: "m1",
+            providerThreadId: "t1",
+            sentAt: new Date("2026-11-15T00:00:00Z"),
+          }),
+        ],
+      },
+    });
+    const deps = syncDeps(base, gmail);
+    await syncMailbox(deps, mailAccountId);
+    const [thread] = await db.select().from(threads);
+    const [m1] = await db.select().from(messages);
+    if (!thread || !m1) throw new Error("not synced");
+    // A valid key, so "not pending" below is about the newest message, not a missing key.
+    await saveAiCredential(db, {
+      userId,
+      keyCiphertext: Buffer.from("ct"),
+      keyHint: "abcd",
+      status: "valid",
+      lastValidatedAt: T0,
+    });
+    await upsertThreadInsight(db, {
+      threadId: thread.id,
+      category: "needs_reply",
+      urgency: 2,
+      importance: 3,
+      needsReply: true,
+      reasons: ["Asks you a question."],
+      classifiedThroughMessageId: m1.id,
+      aiProvider: "anthropic",
+      model: "claude-opus-5-5",
+      promptVersion: "classify-v1",
+    });
+    expect(await listInboxThreads(db, userId, { category: "needs_reply" })).toHaveLength(1);
+
+    gmail.threads.t1?.push(
+      fakeMessage({
+        providerMessageId: "m2",
+        providerThreadId: "t1",
+        from: { name: "Alias", address: "alias@work.com" },
+        sentAt: new Date("2026-11-16T00:00:00Z"),
+        labelIds: ["SENT"],
+      }),
+      // An unsent draft newer than the reply must not decide who wrote last.
+      fakeMessage({
+        providerMessageId: "d1",
+        providerThreadId: "t1",
+        from: { name: "Me", address: "me@gmail.com" },
+        sentAt: new Date("2026-11-17T00:00:00Z"),
+        labelIds: ["DRAFT"],
+      }),
+    );
+    gmail.history.push({
+      changedThreadIds: ["t1"],
+      deletedMessageIds: [],
+      historyId: "180",
+      nextPageToken: null,
+    });
+    await syncMailbox(deps, mailAccountId);
+
+    expect(await getThreadInsight(db, thread.id)).toMatchObject({
+      needsReply: false,
+      category: deriveCategory({ urgency: 2, importance: 3, needsReply: false }),
+      classifiedThroughMessageId: m1.id,
+    });
+    expect(await listInboxThreads(db, userId, { category: "needs_reply" })).toEqual([]);
+    expect(await listThreadsPendingClassification(db, new Date(0))).toEqual([]);
+  });
+
+  it("keeps Needs Reply when the newest message is not the user's", async () => {
+    const { base, userId, mailAccountId } = await connectedGmail();
+    const gmail = createFakeGmail({
+      historyId: "100",
+      threads: {
+        t1: [
+          fakeMessage({
+            providerMessageId: "m1",
+            providerThreadId: "t1",
+            from: { name: "Me", address: "me@gmail.com" },
+            sentAt: new Date("2026-11-14T00:00:00Z"),
+            labelIds: ["SENT"],
+          }),
+          fakeMessage({
+            providerMessageId: "m2",
+            providerThreadId: "t1",
+            sentAt: new Date("2026-11-15T00:00:00Z"),
+          }),
+        ],
+      },
+    });
+    const deps = syncDeps(base, gmail);
+    await syncMailbox(deps, mailAccountId);
+    const [thread] = await db.select().from(threads);
+    const [m2] = await db.select().from(messages).where(eq(messages.providerMessageId, "m2"));
+    if (!thread || !m2) throw new Error("not synced");
+    await upsertThreadInsight(db, {
+      threadId: thread.id,
+      category: "needs_reply",
+      urgency: 2,
+      importance: 3,
+      needsReply: true,
+      reasons: ["Asks you a question."],
+      classifiedThroughMessageId: m2.id,
+      aiProvider: "anthropic",
+      model: "claude-opus-5-5",
+      promptVersion: "classify-v1",
+    });
+    gmail.history.push({
+      changedThreadIds: ["t1"],
+      deletedMessageIds: [],
+      historyId: "180",
+      nextPageToken: null,
+    });
+    await syncMailbox(deps, mailAccountId);
+    expect(await listInboxThreads(db, userId, { category: "needs_reply" })).toHaveLength(1);
   });
 
   it("falls back to a backfill when the history id has expired", async () => {

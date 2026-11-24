@@ -4,6 +4,7 @@ import {
   deleteMessagesNotIn,
   deleteThreadsByProviderIds,
   getBodyCacheDays,
+  markThreadAnswered,
   setMessageBody,
   upsertMessage,
   upsertThread,
@@ -45,7 +46,12 @@ export async function persistThreads(
       continue;
     }
     const threadId = await upsertThread(tx, account.id, summarizeThread(thread));
+    // Newest kept message, ordered like the classification scan: sent_at, then id (uuid order
+    // equals lowercase-hex string order).
+    let newest: { sentAt: Date; id: string; isFromUser: boolean } | null = null;
     for (const message of thread.messages) {
+      // SENT covers send-as aliases; the address check covers providers/tests without labels.
+      const isFromUser = message.labelIds.includes("SENT") || message.from.address === owner;
       const messageId = await upsertMessage(tx, threadId, account.id, {
         providerMessageId: message.providerMessageId,
         internetMessageId: message.internetMessageId,
@@ -55,10 +61,14 @@ export async function persistThreads(
         subject: message.subject,
         snippet: message.snippet,
         sentAt: message.sentAt,
-        // SENT covers send-as aliases; the address check covers providers/tests without labels.
-        isFromUser: message.labelIds.includes("SENT") || message.from.address === owner,
+        isFromUser,
         hasAttachments: message.hasAttachments,
       });
+      const sentAt = message.sentAt.getTime();
+      const newestAt = newest?.sentAt.getTime() ?? Number.NEGATIVE_INFINITY;
+      if (!newest || sentAt > newestAt || (sentAt === newestAt && messageId > newest.id)) {
+        newest = { sentAt: message.sentAt, id: messageId, isFromUser };
+      }
       // Always cache, even an empty body, so bodiless messages are not refetched on every view.
       const blob = await encryptBody(encryptor, messageId, {
         text: message.bodyText,
@@ -71,5 +81,8 @@ export async function persistThreads(
       threadId,
       thread.messages.map((m) => m.providerMessageId),
     );
+    // The user answered last: drop the thread out of Needs Reply now, with no AI call (the scan
+    // skips it). A no-op when there is no insight or it does not need a reply.
+    if (newest?.isFromUser) await markThreadAnswered(tx, threadId);
   }
 }
