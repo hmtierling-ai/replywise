@@ -66,15 +66,25 @@ export async function MailboxList() {
                         name="enabled"
                         id={`auto-${account.id}`}
                         defaultChecked={account.autoDraftNeedsReply}
+                        aria-label={`Auto-draft replies for ${account.emailAddress}`}
+                        aria-describedby={`auto-hint-${account.id}`}
                       />
                       <label htmlFor={`auto-${account.id}`}>
                         Auto-draft replies for Needs Reply
                       </label>
-                      <Button type="submit" size="sm" variant="outline">
+                      <Button
+                        type="submit"
+                        size="sm"
+                        variant="outline"
+                        aria-label={`Save auto-draft setting for ${account.emailAddress}`}
+                      >
                         Save
                       </Button>
                     </form>
-                    <p className="mt-1 text-xs text-muted-foreground">
+                    <p
+                      id={`auto-hint-${account.id}`}
+                      className="mt-1 text-xs text-muted-foreground"
+                    >
                       Writes a draft with your key when mail needs a reply. It stays in Replywise
                       until you save it to Gmail.
                     </p>

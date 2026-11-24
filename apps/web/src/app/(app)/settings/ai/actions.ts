@@ -76,7 +76,10 @@ export async function saveWritingPreferencesAction(formData: FormData): Promise<
   const user = await requireUser();
   const tone = String(formData.get("defaultTone") ?? "");
   const model = String(formData.get("generationModel") ?? "");
-  const language = String(formData.get("replyLanguage") ?? "").trim();
+  const language = String(formData.get("replyLanguage") ?? "")
+    .replace(/[\r\n"<>]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!(REPLY_TONES as readonly string[]).includes(tone) || !isAiModel(model)) {
     redirect(`${AI_PATH}?error=invalid_preferences`);
   }

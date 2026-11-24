@@ -58,6 +58,7 @@ export async function WritingSettings() {
               <input
                 type="radio"
                 name="generationModel"
+                aria-label={`Reply model: ${option.label}`}
                 value={option.id}
                 defaultChecked={option.id === prefs.generationModel}
                 className="mt-1"
@@ -78,9 +79,10 @@ export async function WritingSettings() {
             rows={3}
             maxLength={1000}
             defaultValue={prefs.signature}
+            aria-describedby="signature-hint"
             className={textareaClass}
           />
-          <p className="text-xs text-muted-foreground">
+          <p id="signature-hint" className="text-xs text-muted-foreground">
             Added to the end of drafts saved to Gmail.
           </p>
         </div>
@@ -93,9 +95,10 @@ export async function WritingSettings() {
             rows={4}
             maxLength={2000}
             defaultValue={prefs.writingStyleNotes}
+            aria-describedby="style-notes-hint"
             className={textareaClass}
           />
-          <p className="text-xs text-muted-foreground">
+          <p id="style-notes-hint" className="text-xs text-muted-foreground">
             e.g. I write short paragraphs and sign off with &apos;Cheers&apos;.
           </p>
         </div>
@@ -108,8 +111,9 @@ export async function WritingSettings() {
             maxLength={35}
             defaultValue={prefs.replyLanguage ?? ""}
             placeholder="Same as the email"
+            aria-describedby="reply-language-hint"
           />
-          <p className="text-xs text-muted-foreground">
+          <p id="reply-language-hint" className="text-xs text-muted-foreground">
             Leave empty to reply in the language of the email.
           </p>
         </div>
