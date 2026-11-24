@@ -1,3 +1,4 @@
+import { deriveCategory } from "@replywise/core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../client";
 import { aiUsageEvents } from "../schema/ai";
@@ -18,6 +19,7 @@ import {
   getThreadInsight,
   listThreadsPendingClassification,
   markAiCredentialInvalid,
+  markThreadAnswered,
   recordAiUsage,
   saveAiCredential,
   setClassificationModel,
@@ -83,6 +85,36 @@ describe("AI credentials", () => {
     expect((await getAiCredentialSummary(db, alice.id))?.status).toBe("invalid");
     expect(await deleteAiCredential(db, alice.id)).toBe(true);
     expect(await deleteAiCredential(db, alice.id)).toBe(false);
+  });
+
+  it("only invalidates the key version the caller read", async () => {
+    const alice = await insertUser(db);
+    await validKey(alice.id); // key A (inserted: updated_at from the db default, µs precision)
+    const versionA = (await getAiCredentialForUse(db, alice.id))?.updatedAt;
+    expect(versionA).toBeInstanceOf(Date);
+    await new Promise((r) => setTimeout(r, 20));
+    await saveAiCredential(db, {
+      userId: alice.id,
+      keyCiphertext: Buffer.from("ct-b"),
+      keyHint: "bbbb",
+      status: "valid",
+      lastValidatedAt: now,
+    }); // key B
+    const versionB = (await getAiCredentialForUse(db, alice.id))?.updatedAt;
+    expect(versionB?.getTime()).toBeGreaterThan(versionA?.getTime() ?? Number.POSITIVE_INFINITY);
+
+    await markAiCredentialInvalid(db, alice.id, versionA);
+    expect((await getAiCredentialSummary(db, alice.id))?.status).toBe("valid");
+    await markAiCredentialInvalid(db, alice.id, versionB);
+    expect((await getAiCredentialSummary(db, alice.id))?.status).toBe("invalid");
+  });
+
+  it("matches the version of a freshly inserted key despite µs precision", async () => {
+    const alice = await insertUser(db);
+    await validKey(alice.id);
+    const version = (await getAiCredentialForUse(db, alice.id))?.updatedAt;
+    await markAiCredentialInvalid(db, alice.id, version);
+    expect((await getAiCredentialSummary(db, alice.id))?.status).toBe("invalid");
   });
 });
 
@@ -245,6 +277,60 @@ describe("insights, classification source and usage", () => {
       classifiedThroughMessageId: message.id,
       model: "claude-opus-5-5",
     });
+  });
+
+  it("markThreadAnswered clears needs_reply with a category matching deriveCategory", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    const { thread, message } = await inboxThread(box.id, now);
+    for (let urgency = 1; urgency <= 5; urgency++) {
+      for (let importance = 1; importance <= 5; importance++) {
+        await upsertThreadInsight(db, {
+          threadId: thread.id,
+          category: deriveCategory({ urgency, importance, needsReply: true }),
+          urgency,
+          importance,
+          needsReply: true,
+          reasons: ["Asks a question."],
+          classifiedThroughMessageId: message.id,
+          aiProvider: "anthropic",
+          model: "claude-opus-5-5",
+          promptVersion: "classify-v1",
+        });
+        await markThreadAnswered(db, thread.id);
+        const insight = await getThreadInsight(db, thread.id);
+        expect({ urgency, importance, ...insight }).toMatchObject({
+          urgency,
+          importance,
+          needsReply: false,
+          category: deriveCategory({ urgency, importance, needsReply: false }),
+          classifiedThroughMessageId: message.id,
+        });
+      }
+    }
+  });
+
+  it("markThreadAnswered leaves insights without needs_reply and missing insights alone", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    const { thread, message } = await inboxThread(box.id, now);
+    await markThreadAnswered(db, thread.id); // no insight: no-op
+    expect(await getThreadInsight(db, thread.id)).toBeNull();
+    await upsertThreadInsight(db, {
+      threadId: thread.id,
+      category: "important", // deliberately not what deriveCategory would give for 1/1
+      urgency: 1,
+      importance: 1,
+      needsReply: false,
+      reasons: [],
+      classifiedThroughMessageId: message.id,
+      aiProvider: "anthropic",
+      model: "claude-opus-5-5",
+      promptVersion: "classify-v1",
+    });
+    const before = await getThreadInsight(db, thread.id);
+    await markThreadAnswered(db, thread.id);
+    expect(await getThreadInsight(db, thread.id)).toEqual(before);
   });
 
   it("loads a thread with its owner, mailbox and messages oldest first", async () => {

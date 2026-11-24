@@ -63,19 +63,40 @@ export async function getAiCredentialSummary(
 export async function getAiCredentialForUse(
   db: DbExecutor,
   userId: string,
-): Promise<{ keyCiphertext: Buffer; status: CredentialStatus } | null> {
+): Promise<{ keyCiphertext: Buffer; status: CredentialStatus; updatedAt: Date } | null> {
   const [row] = await db
-    .select({ keyCiphertext: aiCredentials.keyCiphertext, status: aiCredentials.status })
+    .select({
+      keyCiphertext: aiCredentials.keyCiphertext,
+      status: aiCredentials.status,
+      updatedAt: aiCredentials.updatedAt,
+    })
     .from(aiCredentials)
     .where(and(eq(aiCredentials.userId, userId), eq(aiCredentials.provider, "anthropic")));
   return row ?? null;
 }
 
-export async function markAiCredentialInvalid(db: DbExecutor, userId: string): Promise<void> {
+/**
+ * With `version` (the `updatedAt` read alongside the key), only that key version is invalidated,
+ * so a late 401 for an old key cannot reject a key the user has just replaced. Compared at ms
+ * precision because JS dates carry no µs.
+ */
+export async function markAiCredentialInvalid(
+  db: DbExecutor,
+  userId: string,
+  version?: Date,
+): Promise<void> {
   await db
     .update(aiCredentials)
     .set({ status: "invalid", updatedAt: new Date() })
-    .where(and(eq(aiCredentials.userId, userId), eq(aiCredentials.provider, "anthropic")));
+    .where(
+      and(
+        eq(aiCredentials.userId, userId),
+        eq(aiCredentials.provider, "anthropic"),
+        version
+          ? sql`date_trunc('milliseconds', ${aiCredentials.updatedAt}) = ${version.toISOString()}::timestamptz`
+          : undefined,
+      ),
+    );
 }
 
 export async function deleteAiCredential(db: DbExecutor, userId: string): Promise<boolean> {
@@ -130,6 +151,27 @@ export async function upsertThreadInsight(db: DbExecutor, input: InsightWrite): 
       target: threadInsights.threadId,
       set: { ...rest, updatedAt: new Date() },
     });
+}
+
+/**
+ * The user replied last: clear needs_reply without an AI call. The CASE mirrors `deriveCategory`
+ * (@replywise/core) with needsReply=false; keep the two in sync (parity-tested in
+ * ai.int.test.ts). `classified_through_message_id` is untouched, so the scan is unaffected.
+ */
+export async function markThreadAnswered(db: DbExecutor, threadId: string): Promise<void> {
+  await db
+    .update(threadInsights)
+    .set({
+      needsReply: false,
+      category: sql`case
+        when ${threadInsights.urgency} >= 4 then 'urgent'
+        when ${threadInsights.importance} >= 4 then 'important'
+        when ${threadInsights.importance} >= 2 then 'informational'
+        else 'low_priority'
+      end::inbox_category`,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(threadInsights.threadId, threadId), eq(threadInsights.needsReply, true)));
 }
 
 export interface ThreadInsight {
