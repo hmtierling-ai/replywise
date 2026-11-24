@@ -7,6 +7,7 @@ interface Call {
   method: string | undefined;
   url: string;
   body: unknown;
+  headers?: Record<string, string>;
 }
 
 function fakeFetch(status: number, responseBody: unknown = {}) {
@@ -16,6 +17,7 @@ function fakeFetch(status: number, responseBody: unknown = {}) {
       method: init?.method,
       url: String(url),
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      headers: init?.headers as Record<string, string> | undefined,
     });
     return new Response(JSON.stringify(responseBody), { status });
   };
@@ -29,24 +31,34 @@ describe("createGmailDraftsApi", () => {
     const { calls, fetchImpl } = fakeFetch(200, { id: "d1" });
     const api = createGmailDraftsApi("tok", { fetch: fetchImpl });
     await expect(api.createDraft(input)).resolves.toEqual({ draftId: "d1" });
-    expect(calls).toEqual([
+    expect(calls).toMatchObject([
       {
         method: "POST",
         url: "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
         body: { message: { raw: "cmF3", threadId: "t1" } },
+        headers: { authorization: "Bearer tok", "content-type": "application/json" },
       },
     ]);
+  });
+
+  it("encodes the draft id in the update URL", async () => {
+    const { calls, fetchImpl } = fakeFetch(200, { id: "a/b c" });
+    const api = createGmailDraftsApi("tok", { fetch: fetchImpl });
+    await api.updateDraft("a/b c", input);
+    expect(calls[0]?.url).toBe("https://gmail.googleapis.com/gmail/v1/users/me/drafts/a%2Fb%20c");
+    expect(calls[0]?.headers).toMatchObject({ authorization: "Bearer tok" });
   });
 
   it("updates a draft with PUT", async () => {
     const { calls, fetchImpl } = fakeFetch(200, { id: "d1" });
     const api = createGmailDraftsApi("tok", { fetch: fetchImpl });
     await expect(api.updateDraft("d1", input)).resolves.toEqual({ draftId: "d1" });
-    expect(calls).toEqual([
+    expect(calls).toMatchObject([
       {
         method: "PUT",
         url: "https://gmail.googleapis.com/gmail/v1/users/me/drafts/d1",
         body: { id: "d1", message: { raw: "cmF3", threadId: "t1" } },
+        headers: { authorization: "Bearer tok", "content-type": "application/json" },
       },
     ]);
   });

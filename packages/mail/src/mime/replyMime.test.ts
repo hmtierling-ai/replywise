@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReplyMime, toBase64Url } from "./replyMime";
+import { buildReplyMime, InvalidRecipientError, toBase64Url } from "./replyMime";
 
 const input = {
   from: { name: "Me", address: "me@gmail.com" },
@@ -17,7 +17,9 @@ describe("buildReplyMime", () => {
     expect(mime).toContain("To: Ada Lovelace <ada@client.com>\r\n");
     expect(mime).toContain("Subject: Re: Contract\r\n");
     expect(mime).toContain("In-Reply-To: <m1@client.com>\r\n");
-    expect(mime).toContain("References: <m0@client.com> <m1@client.com>\r\n");
+    expect(mime).toContain("References: <m0@client.com>\r\n <m1@client.com>\r\n");
+    expect(mime).toMatch(/^Date: .+\r\n/m);
+    expect(mime).toMatch(/^Message-ID: <[^<>\s]+@gmail\.com>\r\n/m);
     expect(mime).toContain("Content-Type: text/plain; charset=UTF-8\r\n");
     expect(mime).toContain("Content-Transfer-Encoding: base64\r\n");
     const body = mime.split("\r\n\r\n")[1] ?? "";
@@ -47,6 +49,63 @@ describe("buildReplyMime", () => {
     const mime = buildReplyMime({ ...input, inReplyTo: null, references: [] });
     expect(mime).not.toContain("In-Reply-To");
     expect(mime).not.toContain("References");
+  });
+});
+
+describe("recipient validation", () => {
+  const withTo = (addr: string) => ({ ...input, to: { name: null, address: addr } });
+  it.each(["a@x.com, evil@y.com", "a@x.com>evil", "a b@x.com", "a@x.com;b@y.com", "a@@x.com"])(
+    "rejects %s",
+    (addr) => {
+      expect(() => buildReplyMime(withTo(addr))).toThrow(InvalidRecipientError);
+    },
+  );
+  it("rejects an invalid sender and uses a fixed message", () => {
+    const bad = { ...input, from: { name: null, address: "me@x.com, evil@y.com" } };
+    expect(() => buildReplyMime(bad)).toThrow("Invalid recipient address");
+  });
+  it("accepts plus addresses", () => {
+    expect(buildReplyMime(withTo("ada+tag@client.co.uk"))).toContain(
+      "To: ada+tag@client.co.uk\r\n",
+    );
+  });
+});
+
+describe("header folding and quoting", () => {
+  it("splits long non-ASCII subjects into words of at most 75 chars", () => {
+    const subject = "Prestação 🎉 ".repeat(20).slice(0, 200);
+    const mime = buildReplyMime({ ...input, subject });
+    const head = mime.split("\r\n\r\n")[0] ?? "";
+    for (const line of head.split("\r\n")) expect(line.length).toBeLessThanOrEqual(998);
+    const unfolded = head.replace(/\r\n /g, " ");
+    const value = /^Subject: (.*)$/m.exec(unfolded)?.[1] ?? "";
+    const words = value.split(" ");
+    for (const w of words) expect(w.length).toBeLessThanOrEqual(75);
+    const decoded = words
+      .map((w) => Buffer.from(w.replace(/^=\?UTF-8\?B\?|\?=$/g, ""), "base64").toString("utf8"))
+      .join("");
+    expect(decoded).toBe(`Re: ${subject}`);
+  });
+  it("folds many references and appends inReplyTo when missing", () => {
+    const refs = Array.from({ length: 40 }, (_, i) => `<r${i}@client.com>`);
+    const mime = buildReplyMime({ ...input, references: refs, inReplyTo: "<last@client.com>" });
+    const head = mime.split("\r\n\r\n")[0] ?? "";
+    expect(head.match(/\r\n <r\d+@client\.com>/g)?.length).toBe(39);
+    expect(head).toMatch(/\r\n <last@client\.com>(\r\n|$)/);
+  });
+  it("escapes backslashes and quotes in quoted display names", () => {
+    const mime = buildReplyMime({
+      ...input,
+      to: { name: 'Ada "A" Smith\\', address: "ada@client.com" },
+    });
+    expect(mime).toContain('To: "Ada \\"A\\" Smith\\\\" <ada@client.com>\r\n');
+  });
+  it("drops message ids containing control characters", () => {
+    const mime = buildReplyMime({
+      ...input,
+      references: ["<a\u0000b@x.com>", "<a\u0085b@x.com>", "<ok@x.com>"],
+    });
+    expect(mime).toContain("References: <ok@x.com>\r\n <m1@client.com>\r\n");
   });
 });
 

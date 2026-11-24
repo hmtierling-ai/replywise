@@ -1,7 +1,7 @@
 export * from "./gmail";
 export * from "./gmail-api";
 export * from "./gmail-drafts";
-export * from "./http";
+export { OAuthError, PROVIDER_TIMEOUT_MS, ProviderHttpError } from "./http";
 export * from "./mime/addresses";
 export * from "./mime/encoded-words";
 export * from "./mime/gmail-message";
