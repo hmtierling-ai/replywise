@@ -97,7 +97,8 @@ async function classify(
     );
   } catch (error) {
     if (error instanceof AiKeyInvalidError) {
-      await markAiCredentialInvalid(deps.db, source.userId);
+      // Version-guarded: a key the user saved while this call ran must not be rejected.
+      await markAiCredentialInvalid(deps.db, source.userId, credential.updatedAt);
       deps.logger.warn({ threadId, error: safeErrorFields(error) }, "classification failed");
       throw new UnrecoverableError(error.name);
     }

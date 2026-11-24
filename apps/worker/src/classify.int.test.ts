@@ -36,6 +36,9 @@ const HOUR_MS = 3_600_000;
 
 beforeAll(async () => {
   handle = await setupTestDb();
+  // Leftovers from an aborted run would make every insert fail.
+  await handle.db.execute(sql`alter table ai_usage_events drop constraint if exists t6_fail`);
+  await handle.db.execute(sql`alter table thread_insights drop constraint if exists f4_fail`);
 });
 afterAll(async () => handle.close());
 beforeEach(async () => resetTestDb(handle.db));
@@ -280,12 +283,72 @@ describe("classifyThreadHandler errors and guards", () => {
         ctx,
       );
     } finally {
-      await db.execute(sql`alter table ai_usage_events drop constraint t6_fail`);
+      await db.execute(sql`alter table ai_usage_events drop constraint if exists t6_fail`);
     }
     expect(await getThreadInsight(db, thread.id)).toMatchObject({
       classifiedThroughMessageId: m1.id,
     });
     expect(lines.join("")).toContain("ai usage not recorded");
+  });
+
+  it("pays once when the insight write keeps failing, then fails permanently", async () => {
+    const { db } = handle;
+    const { alice, thread, m1 } = await seed();
+    const ai = createFakeAiProvider();
+    // Every new insight row violates this CHECK (NOT VALID: existing rows are not scanned).
+    await db.execute(
+      sql`alter table thread_insights add constraint f4_fail check (false) not valid`,
+    );
+    let rejection: unknown;
+    try {
+      rejection = await classifyThreadHandler({ db, encryptor, ai, logger })(
+        { threadId: thread.id, messageId: m1.id },
+        ctx,
+      ).catch((e: unknown) => e);
+    } finally {
+      await db.execute(sql`alter table thread_insights drop constraint if exists f4_fail`);
+    }
+    expect(ai.calls).toHaveLength(1);
+    expect(rejection).toBeInstanceOf(UnrecoverableError);
+    expect((rejection as Error).message).toBe("InsightWriteFailed");
+    const [usage] = await db.execute<{ n: number }>(
+      sql`select count(*)::int as n from ai_usage_events where user_id = ${alice.id}`,
+    );
+    expect(usage?.n).toBe(1);
+    expect(await getThreadInsight(db, thread.id)).toBeNull();
+  });
+
+  it("does not invalidate a key the user replaced while the rejected call ran", async () => {
+    const { db } = handle;
+    const { alice, thread, m1 } = await seed();
+    const rejecting = createFakeAiProvider({ error: new AiKeyInvalidError() });
+    const ai = {
+      ...rejecting,
+      async classify(...args: Parameters<typeof rejecting.classify>) {
+        await new Promise((r) => setTimeout(r, 20));
+        await saveAiCredential(db, {
+          userId: alice.id,
+          keyCiphertext: await encryptor.encrypt(
+            "sk-ant-new-key",
+            aad.aiCredential(alice.id, "anthropic"),
+          ),
+          keyHint: "-new",
+          status: "valid",
+          lastValidatedAt: new Date(),
+        });
+        return rejecting.classify(...args);
+      },
+    };
+    await expect(
+      classifyThreadHandler({ db, encryptor, ai, logger })(
+        { threadId: thread.id, messageId: m1.id },
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(UnrecoverableError);
+    expect(await getAiCredentialSummary(db, alice.id)).toMatchObject({
+      keyHint: "-new",
+      status: "valid",
+    });
   });
 
   it("skips a job whose messageId is not the newest message", async () => {
