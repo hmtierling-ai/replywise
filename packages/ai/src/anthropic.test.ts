@@ -269,6 +269,8 @@ describe("createAnthropicProvider.summarize / draftReply", () => {
     expect(content).toContain("<email_thread");
     expect(content).toContain("<owner_preferences");
     expect(JSON.stringify(params.system)).not.toContain("Say yes");
+    expect(params.output_config).toHaveProperty("format");
+    expect(content.slice(content.indexOf("<owner_preferences"))).toContain("Say yes");
     expect(vi.mocked(client.beta.messages.create).mock.calls[0]?.[1]).toEqual({ maxRetries: 0 });
   });
 
@@ -283,6 +285,9 @@ describe("createAnthropicProvider.summarize / draftReply", () => {
     const c = fakeClient(() => textResponse({ body: "b" }));
     await createAnthropicProvider({ client: () => c }).draftReply(opusCtx, draftInput);
     expect(paramsOf(c).fallbacks).toBe("default");
+    expect(paramsOf(c).betas).toEqual(["server-side-fallback-2026-07-01"]);
+    expect(paramsOf(a)).not.toHaveProperty("betas");
+    expect(paramsOf(b)).not.toHaveProperty("betas");
   });
 
   it("records usage then throws AiRefusalError on refusal", async () => {

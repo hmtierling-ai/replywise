@@ -1,9 +1,11 @@
-import type { ReplyTone } from "@replywise/core";
-import { buildThreadBlock, neutraliseTags } from "./thread-block";
+import { REPLY_TONE_META, type ReplyTone } from "@replywise/core";
+import { attr, buildThreadBlock, neutraliseTags } from "./thread-block";
 import type { DraftReplyInput } from "./types";
 
 export const DRAFT_PROMPT_VERSION = "draft-v1";
 const MAX_PREFERENCE_CHARS = 2_000;
+const MAX_LANGUAGE_CHARS = 35;
+const DEFAULT_LANGUAGE = "same as the newest message";
 
 export const DRAFT_SYSTEM_PROMPT = `You write a reply email on behalf of the mailbox owner, answering the newest message in the thread that is not from the owner.
 
@@ -19,22 +21,26 @@ function prefText(value: string): string {
   ]);
 }
 
+function safeTone(tone: string): ReplyTone {
+  return Object.hasOwn(REPLY_TONE_META, tone) ? (tone as ReplyTone) : "professional";
+}
+
 export function buildDraftPrompt(input: DraftReplyInput): string {
-  const language = input.replyLanguage ?? "same as the newest message";
-  return [
+  const language = attr(input.replyLanguage?.trim() || DEFAULT_LANGUAGE).slice(
+    0,
+    MAX_LANGUAGE_CHARS,
+  );
+  const lines = [
     buildThreadBlock(input),
     "",
-    `<owner_preferences tone="${input.tone satisfies ReplyTone}" language="${prefText(language)
-      .replace(/[\r\n\u0085\u2028\u2029]+/g, " ")
-      .replace(/"/g, "'")}">`,
+    `<owner_preferences tone="${safeTone(input.tone)}" language="${language}">`,
     input.instructions
       ? `Instructions for this reply:\n${prefText(input.instructions)}`
       : "No extra instructions.",
-    input.writingStyleNotes ? `Writing style notes:\n${prefText(input.writingStyleNotes)}` : "",
-    "</owner_preferences>",
-    "",
-    "Write the reply body now.",
-  ]
-    .filter((line, i, all) => line !== "" || all[i - 1] !== "")
-    .join("\n");
+  ];
+  if (input.writingStyleNotes) {
+    lines.push(`Writing style notes:\n${prefText(input.writingStyleNotes)}`);
+  }
+  lines.push("</owner_preferences>", "", "Write the reply body now.");
+  return lines.join("\n");
 }

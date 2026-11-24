@@ -7,7 +7,7 @@ export const MAX_TOTAL_CHARS = 16_000;
 const TRUNCATION_MARK = "\n[truncated]";
 
 /** Attribute values: one line, no quotes or angle brackets, bounded length. */
-function attr(value: string): string {
+export function attr(value: string): string {
   return value
     .replace(/[\r\n\u0085\u2028\u2029]+/g, " ")
     .replace(/"/g, "'")
@@ -21,7 +21,8 @@ export function neutraliseTags(text: string, tags: string[]): string {
   return text.replace(new RegExp(`<\\s*(\\/?)\\s*(${names})\\b`, "gi"), "‹$1$2");
 }
 
-const THREAD_TAGS = ["email_thread", "message"];
+/** owner_preferences is neutralised too, so email text cannot forge the owner's block. */
+const THREAD_TAGS = ["email_thread", "message", "owner_preferences"];
 
 function render(message: ClassifyMessage, index: number, text: string): string {
   const from = message.from.name

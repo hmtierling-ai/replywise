@@ -20,4 +20,11 @@ describe("normalizeDraft", () => {
     );
     expect(MAX_DRAFT_CHARS).toBe(20_000);
   });
+  it("does not split a surrogate pair at the cut", () => {
+    const body = `${"a".repeat(MAX_DRAFT_CHARS - 1)}😀tail`;
+    const out = normalizeDraft({ body }).body;
+    expect(out).toBe("a".repeat(MAX_DRAFT_CHARS - 1));
+    const summary = normalizeSummary({ summary: `${"a".repeat(3_999)}😀` }).summary;
+    expect(summary).toBe("a".repeat(3_999));
+  });
 });
