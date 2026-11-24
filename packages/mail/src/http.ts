@@ -102,20 +102,7 @@ function parseRetryAfterMs(header: string | null): number | undefined {
   return Number(header.trim()) * 1000;
 }
 
-export async function getJson(
-  fetchImpl: FetchLike,
-  url: string,
-  accessToken: string,
-): Promise<Record<string, unknown>> {
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
-      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
-    });
-  } catch (error) {
-    throw classify(error, url);
-  }
+async function jsonOrThrow(response: Response, url: string): Promise<Record<string, unknown>> {
   if (!response.ok) {
     const pathname = new URL(url).pathname;
     const body = await readJson(response);
@@ -130,6 +117,49 @@ export async function getJson(
     throw new ProviderHttpError(response.status, pathname);
   }
   return readJson(response);
+}
+
+export async function getJson(
+  fetchImpl: FetchLike,
+  url: string,
+  accessToken: string,
+): Promise<Record<string, unknown>> {
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw classify(error, url);
+  }
+  return jsonOrThrow(response, url);
+}
+
+/** JSON write (POST/PUT) with the same timeout and error classification as getJson. */
+export async function requestJson(
+  fetchImpl: FetchLike,
+  method: "POST" | "PUT",
+  url: string,
+  accessToken: string,
+  body: unknown,
+): Promise<Record<string, unknown>> {
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      method,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw classify(error, url);
+  }
+  return jsonOrThrow(response, url);
 }
 
 export function tokenGrantFrom(

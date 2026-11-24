@@ -8,6 +8,7 @@ const ROOTS = [
   join(import.meta.dirname, "."),
   join(import.meta.dirname, "../../mailbox/src"),
   join(import.meta.dirname, "../../sync/src"),
+  join(import.meta.dirname, "../../ai/src"),
   join(import.meta.dirname, "../../../apps/worker/src"),
 ].filter((dir) => existsSync(dir));
 
