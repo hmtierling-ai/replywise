@@ -1,6 +1,7 @@
 import {
   completeSummary,
   failSummary,
+  getSummary,
   getThreadForClassification,
   getWritingPreferences,
 } from "@replywise/db";
@@ -11,6 +12,7 @@ import {
   handleAiFailure,
   loadUsableKey,
   rethrowSafely,
+  storePaidResult,
   usageRecorder,
 } from "./generation-shared";
 import { buildThreadInput } from "./thread-text";
@@ -35,6 +37,8 @@ async function summarize(
   threadId: string,
   context: JobContext,
 ): Promise<void> {
+  // Only a requested (pending) summary is worth paying for; a duplicate job finds it settled.
+  if ((await getSummary(deps.db, threadId))?.status !== "pending") return;
   const source = await getThreadForClassification(deps.db, threadId);
   if (!source) return; // thread deleted since the request
   const latest = source.messages.at(-1);
@@ -64,6 +68,15 @@ async function summarize(
       logMessage: "summary failed",
     });
   }
-  await completeSummary(deps.db, { threadId, summary, throughMessageId: latest.id, model });
+  await storePaidResult(
+    deps,
+    () => completeSummary(deps.db, { threadId, summary, throughMessageId: latest.id, model }),
+    {
+      threadId,
+      fail: () => failSummary(deps.db, threadId, "internal"),
+      name: "SummaryWriteFailed",
+      logMessage: "summary write failed",
+    },
+  );
   deps.logger.info({ threadId }, "thread summarized");
 }

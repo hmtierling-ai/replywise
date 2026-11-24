@@ -13,6 +13,7 @@ import {
   handleAiFailure,
   loadUsableKey,
   rethrowSafely,
+  storePaidResult,
   usageRecorder,
 } from "./generation-shared";
 import { buildThreadInput } from "./thread-text";
@@ -76,10 +77,15 @@ async function generate(
     });
   }
   // The signature is not part of the stored body; it is appended when saving to Gmail.
-  await completeDraft(deps.db, {
-    draftId,
-    bodyCiphertext: await deps.encryptor.encrypt(body, aad.replyDraft(draftId)),
-    model,
+  const write = async () => {
+    const bodyCiphertext = await deps.encryptor.encrypt(body, aad.replyDraft(draftId));
+    await completeDraft(deps.db, { draftId, bodyCiphertext, model });
+  };
+  await storePaidResult(deps, write, {
+    threadId,
+    fail: () => failDraft(deps.db, draftId, "internal"),
+    name: "DraftWriteFailed",
+    logMessage: "draft write failed",
   });
   deps.logger.info({ threadId, draftId }, "draft generated");
 }

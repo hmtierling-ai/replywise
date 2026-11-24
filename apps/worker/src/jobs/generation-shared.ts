@@ -39,6 +39,46 @@ export function isFinalAttempt(context: JobContext): boolean {
   return context.attempt >= JOB_ATTEMPTS;
 }
 
+const WRITE_TRIES = 3;
+const WRITE_BASE_DELAY_MS = 200;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Runs a DB write up to 3 times in-process. Used after a paid AI call (or a Gmail write), where a
+ * BullMQ retry would repeat that call. Rethrows the last error.
+ */
+export async function withWriteRetries<T>(write: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await write();
+    } catch (error) {
+      if (attempt >= WRITE_TRIES) throw error;
+      await sleep(WRITE_BASE_DELAY_MS * attempt);
+    }
+  }
+}
+
+/**
+ * Stores a paid result with in-process retries. On final failure: logs, fails the row (best
+ * effort) and throws `UnrecoverableError(name)` so BullMQ never repeats the paid call.
+ */
+export async function storePaidResult<T>(
+  deps: Pick<GenerationDeps, "logger">,
+  write: () => Promise<T>,
+  options: { threadId: string; fail?: () => Promise<unknown>; name: string; logMessage: string },
+): Promise<T> {
+  try {
+    return await withWriteRetries(write);
+  } catch (error) {
+    deps.logger.warn(
+      { threadId: options.threadId, error: safeErrorFields(error) },
+      options.logMessage,
+    );
+    if (options.fail) await options.fail().catch(() => undefined);
+    throw new UnrecoverableError(options.name);
+  }
+}
+
 /** The user's decrypted key when it is stored and valid; null otherwise. */
 export async function loadUsableKey(
   deps: Pick<GenerationDeps, "db" | "encryptor">,

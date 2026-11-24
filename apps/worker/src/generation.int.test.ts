@@ -4,6 +4,7 @@ import { aad } from "@replywise/crypto";
 import {
   auditLogs,
   createPendingDraft,
+  discardDraft,
   getDraftForWorker,
   getSummary,
   mailAccounts,
@@ -33,7 +34,7 @@ import { createLogger } from "@replywise/observability";
 import type { JobQueue } from "@replywise/queue";
 import { encryptBody } from "@replywise/sync";
 import { UnrecoverableError } from "bullmq";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { classifyThreadHandler } from "./jobs/classify-thread";
 import { generateDraftHandler } from "./jobs/generate-draft";
@@ -50,6 +51,9 @@ const DRAFT_TEXT = "Hi Ada,\n\nYes — I'll sign it by Friday.";
 
 beforeAll(async () => {
   handle = await setupTestDb();
+  // Leftovers from an aborted run would make every write fail.
+  await handle.db.execute(sql`alter table reply_drafts drop constraint if exists g7_fail`);
+  await handle.db.execute(sql`alter table thread_summaries drop constraint if exists s7_fail`);
 });
 afterAll(async () => handle.close());
 beforeEach(async () => resetTestDb(handle.db));
@@ -111,14 +115,18 @@ async function seed() {
 
 async function pendingDraft(
   s: Awaited<ReturnType<typeof seed>>,
-  overrides: { tone?: "friendly" | "professional"; instructions?: string | null } = {},
+  overrides: {
+    tone?: "friendly" | "professional";
+    instructions?: string | null;
+    forMessageId?: string;
+  } = {},
 ) {
   return createPendingDraft(handle.db, {
     threadId: s.thread.id,
     userId: s.user.id,
     tone: overrides.tone ?? "friendly",
     instructions: overrides.instructions ?? "Say yes",
-    forMessageId: s.m1.id,
+    forMessageId: overrides.forMessageId ?? s.m1.id,
     placeholderCiphertext: await encryptor.encrypt("", aad.replyDraft("pending")),
     aiProvider: "anthropic",
     model: "claude-opus-5-5",
@@ -233,7 +241,72 @@ describe("summarizeThreadHandler", () => {
   });
 });
 
+describe("summarizeThreadHandler guards", () => {
+  it("does nothing unless a summary was requested and is still pending", async () => {
+    const { db } = handle;
+    const s = await seed();
+    const ai = createFakeAiProvider();
+    const handler = summarizeThreadHandler({ db, encryptor, ai, logger });
+    await handler({ threadId: s.thread.id }, ctx); // never requested
+    await requestSummary(db, s.thread.id);
+    await handler({ threadId: s.thread.id }, ctx);
+    await handler({ threadId: s.thread.id }, ctx); // duplicate job: already ready
+    expect(ai.summarizeCalls).toHaveLength(1);
+    expect((await getSummary(db, s.thread.id))?.status).toBe("ready");
+  });
+
+  it("pays once when the summary write keeps failing", async () => {
+    const { db } = handle;
+    const s = await seed();
+    await requestSummary(db, s.thread.id);
+    const ai = createFakeAiProvider();
+    const handler = summarizeThreadHandler({ db, encryptor, ai, logger });
+    await db.execute(
+      sql`alter table thread_summaries add constraint s7_fail check (status <> 'ready') not valid`,
+    );
+    let rejection: unknown;
+    try {
+      rejection = await handler({ threadId: s.thread.id }, ctx).catch((e: unknown) => e);
+      await handler({ threadId: s.thread.id }, { jobId: "t", attempt: 2 });
+    } finally {
+      await db.execute(sql`alter table thread_summaries drop constraint if exists s7_fail`);
+    }
+    expect(rejection).toBeInstanceOf(UnrecoverableError);
+    expect((rejection as Error).message).toBe("SummaryWriteFailed");
+    expect(ai.summarizeCalls).toHaveLength(1);
+    expect(await getSummary(db, s.thread.id)).toMatchObject({
+      status: "failed",
+      error: "internal",
+    });
+  });
+});
+
 describe("generateDraftHandler", () => {
+  it("pays once when the draft write keeps failing", async () => {
+    const { db } = handle;
+    const s = await seed();
+    const draftId = await pendingDraft(s);
+    const ai = createFakeAiProvider();
+    const handler = generateDraftHandler({ db, encryptor, ai, logger });
+    await db.execute(
+      sql`alter table reply_drafts add constraint g7_fail check (status <> 'generated') not valid`,
+    );
+    let rejection: unknown;
+    try {
+      rejection = await handler({ draftId }, ctx).catch((e: unknown) => e);
+      await handler({ draftId }, { jobId: "t", attempt: 2 });
+    } finally {
+      await db.execute(sql`alter table reply_drafts drop constraint if exists g7_fail`);
+    }
+    expect(rejection).toBeInstanceOf(UnrecoverableError);
+    expect((rejection as Error).message).toBe("DraftWriteFailed");
+    expect(ai.draftCalls).toHaveLength(1);
+    expect(await getDraftForWorker(db, draftId)).toMatchObject({
+      status: "failed",
+      error: "internal",
+    });
+  });
+
   it("generates the body with the draft's tone and instructions and records usage", async () => {
     const { db } = handle;
     const s = await seed();
@@ -355,13 +428,14 @@ describe("saveDraftHandler", () => {
     });
   });
 
-  it("keeps the save requested on a Gmail 500 until the final attempt, then fails it", async () => {
+  it("keeps the save requested on a Gmail 500 for an update until the final attempt, then fails it", async () => {
     const { db } = handle;
     const s = await seed();
     const draftId = await generatedDraft(s);
+    await markDraftSaved(db, draftId, "r-1", new Date());
     await requestDraftSave(db, s.user.id, draftId, new Date());
     const gmail = fakeGmailDrafts({
-      error: new ProviderHttpError(500, "/gmail/v1/users/me/drafts"),
+      error: new ProviderHttpError(500, "/gmail/v1/users/me/drafts/{id}"),
     });
     const handler = saveDraftHandler(saveDeps(gmail.factory));
 
@@ -374,8 +448,9 @@ describe("saveDraftHandler", () => {
     const last = await handler({ draftId }, lastCtx).catch((e: unknown) => e);
     expect(last).toBeInstanceOf(ProviderHttpError);
     expect((last as Error).message).not.toMatch(/Ada|Friday/);
+    expect(gmail.calls.create).toHaveLength(0);
     expect(await getDraftForWorker(db, draftId)).toMatchObject({
-      status: "generated",
+      status: "saved",
       saveRequestedAt: null,
       error: "gmail_unavailable",
     });
@@ -395,6 +470,91 @@ describe("saveDraftHandler", () => {
       saveRequestedAt: null,
       error: "gmail_unavailable",
     });
+  });
+
+  it("does not retry a create that failed with a 503, since Gmail may hold the draft", async () => {
+    const { db } = handle;
+    const s = await seed();
+    const draftId = await generatedDraft(s);
+    await requestDraftSave(db, s.user.id, draftId, new Date());
+    const gmail = fakeGmailDrafts({
+      error: new ProviderHttpError(503, "/gmail/v1/users/me/drafts"),
+    });
+    const rejection = await saveDraftHandler(saveDeps(gmail.factory))({ draftId }, ctx).catch(
+      (e: unknown) => e,
+    );
+    expect(rejection).toBeInstanceOf(UnrecoverableError);
+    expect((rejection as Error).message).toBe("ProviderHttpError");
+    expect(gmail.calls.create).toHaveLength(1);
+    expect(await getDraftForWorker(db, draftId)).toMatchObject({
+      saveRequestedAt: null,
+      error: "gmail_unavailable",
+    });
+  });
+
+  it("retries a rate-limited create and keeps the save requested", async () => {
+    const { db } = handle;
+    const s = await seed();
+    const draftId = await generatedDraft(s);
+    await requestDraftSave(db, s.user.id, draftId, new Date());
+    const error = new ProviderHttpError(429, "/gmail/v1/users/me/drafts", true);
+    const gmail = fakeGmailDrafts({ error });
+    const rejection = await saveDraftHandler(saveDeps(gmail.factory))({ draftId }, ctx).catch(
+      (e: unknown) => e,
+    );
+    expect(rejection).toBe(error);
+    const draft = await getDraftForWorker(db, draftId);
+    expect(draft?.saveRequestedAt).not.toBeNull();
+    expect(draft?.error).toBeNull();
+  });
+
+  it("skips the audit entry when the draft is discarded while the save runs", async () => {
+    const { db } = handle;
+    const s = await seed();
+    const draftId = await generatedDraft(s);
+    await requestDraftSave(db, s.user.id, draftId, new Date());
+    const gmail = fakeGmailDrafts();
+    const factory = (token: string): GmailDraftsApi => {
+      const api = gmail.factory(token);
+      return {
+        ...api,
+        async createDraft(input) {
+          await discardDraft(db, s.user.id, draftId);
+          return api.createDraft(input);
+        },
+      };
+    };
+    await saveDraftHandler(saveDeps(factory))({ draftId }, ctx);
+    expect(gmail.calls.create).toHaveLength(1);
+    expect(await getDraftForWorker(db, draftId)).toMatchObject({
+      status: "discarded",
+      providerDraftId: null,
+    });
+    const audit = await db.select().from(auditLogs).where(eq(auditLogs.action, "draft.saved"));
+    expect(audit).toEqual([]);
+  });
+
+  it("never replies to the user's own message, even when the draft was made for it", async () => {
+    const { db } = handle;
+    const s = await seed();
+    const own = await insertMessage(db, s.thread.id, s.account.id, {
+      isFromUser: true,
+      fromAddress: { name: "Me", address: "me@gmail.com" },
+      toAddresses: [{ name: "Ada", address: "ada@client.com" }],
+      internetMessageId: "<m2@gmail.com>",
+      sentAt: new Date(Date.now() - HOUR_MS / 2),
+    });
+    const draftId = await pendingDraft(s, { forMessageId: own.id });
+    await generateDraftHandler({ db, encryptor, ai: createFakeAiProvider(), logger })(
+      { draftId },
+      ctx,
+    );
+    await requestDraftSave(db, s.user.id, draftId, new Date());
+    const gmail = fakeGmailDrafts();
+    await saveDraftHandler(saveDeps(gmail.factory))({ draftId }, ctx);
+    const mime = decodeRaw(gmail.calls.create[0]?.raw ?? "");
+    expect(mime).toMatch(/^To: .*ada@client\.com/m);
+    expect(mime).toContain("In-Reply-To: <m1@client.com>");
   });
 
   it("fails with no_recipient when the reply target's address is invalid", async () => {
@@ -470,6 +630,33 @@ describe("auto-draft in classifyThreadHandler", () => {
     await handler({ threadId: s.thread.id, messageId: s.m1.id }, ctx);
     expect(enqueued).toHaveLength(1);
     expect(await db.select().from(replyDrafts)).toHaveLength(1);
+  });
+
+  it("queues nothing when the user replied while the classification ran", async () => {
+    const { db } = handle;
+    const s = await seed();
+    await setAutoDraft(db, s.user.id, s.account.id, true);
+    const { queue, enqueued } = fakeQueue();
+    const base = createFakeAiProvider(needsReply);
+    const ai = {
+      ...base,
+      async classify(...args: Parameters<typeof base.classify>) {
+        await insertMessage(db, s.thread.id, s.account.id, {
+          isFromUser: true,
+          fromAddress: { name: "Me", address: "me@gmail.com" },
+          sentAt: new Date(),
+        });
+        return base.classify(...args);
+      },
+    };
+    await classifyThreadHandler({ db, encryptor, ai, logger, queue })(
+      { threadId: s.thread.id, messageId: s.m1.id },
+      ctx,
+    );
+    expect(base.calls).toHaveLength(1);
+    expect(enqueued).toHaveLength(0);
+    expect(await db.select().from(replyDrafts)).toHaveLength(0);
+    expect(await db.select().from(threadInsights)).toHaveLength(0);
   });
 
   it("queues nothing when auto-draft is off", async () => {

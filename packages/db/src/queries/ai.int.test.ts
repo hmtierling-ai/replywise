@@ -303,7 +303,7 @@ describe("insights, classification source and usage", () => {
       sentAt: new Date(now.getTime() - 60 * 60 * 1000),
       isFromUser: true,
     });
-    await upsertThreadInsight(db, insight);
+    expect(await upsertThreadInsight(db, insight)).toBe(false);
     expect(await getThreadInsight(db, thread.id)).toBeNull();
 
     const other = await insertThread(db, box.id, { providerLabels: ["INBOX"] });
@@ -311,11 +311,13 @@ describe("insights, classification source and usage", () => {
       sentAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
       isFromUser: false,
     });
-    await upsertThreadInsight(db, {
-      ...insight,
-      threadId: other.id,
-      classifiedThroughMessageId: only.id,
-    });
+    expect(
+      await upsertThreadInsight(db, {
+        ...insight,
+        threadId: other.id,
+        classifiedThroughMessageId: only.id,
+      }),
+    ).toBe(true);
     expect(await getThreadInsight(db, other.id)).toMatchObject({ needsReply: true });
   });
 

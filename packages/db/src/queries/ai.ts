@@ -142,7 +142,8 @@ export interface InsightWrite {
   promptVersion: string;
 }
 
-export async function upsertThreadInsight(db: DbExecutor, input: InsightWrite): Promise<void> {
+/** Returns false when the race guard skipped the write (the user already replied). */
+export async function upsertThreadInsight(db: DbExecutor, input: InsightWrite): Promise<boolean> {
   const { threadId, ...rest } = input;
   // Skip when the user has already replied after the classified message (the reply clears
   // needs_reply in sync; an in-flight classification must not resurrect it). A missing base
@@ -157,7 +158,7 @@ export async function upsertThreadInsight(db: DbExecutor, input: InsightWrite): 
         and (newer.sent_at, newer.id) > (base.sent_at, base.id)
     ) as answered
   `);
-  if ([...rows][0]?.answered) return;
+  if ([...rows][0]?.answered) return false;
   await db
     .insert(threadInsights)
     .values(input)
@@ -165,6 +166,7 @@ export async function upsertThreadInsight(db: DbExecutor, input: InsightWrite): 
       target: threadInsights.threadId,
       set: { ...rest, updatedAt: new Date() },
     });
+  return true;
 }
 
 /**

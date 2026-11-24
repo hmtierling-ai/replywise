@@ -23,6 +23,7 @@ import {
   hasDraftForMessage,
   listDraftsForThread,
   markDraftSaved,
+  recordProviderDraftId,
   requestDraftSave,
   requestSummary,
   setAutoDraft,
@@ -197,7 +198,7 @@ describe("draft state guards", () => {
     await completeDraft(db, { draftId: id, ...body("b1") });
     await requestDraftSave(db, alice.id, id, new Date());
     await discardDraft(db, alice.id, id);
-    await markDraftSaved(db, id, "r-1", new Date());
+    expect(await markDraftSaved(db, id, "r-1", new Date())).toBe(false);
     expect(await getDraftForUser(db, alice.id, id)).toMatchObject({
       status: "discarded",
       providerDraftId: null,
@@ -206,6 +207,33 @@ describe("draft state guards", () => {
     expect(await getDraftForUser(db, alice.id, id)).toMatchObject({
       status: "discarded",
       error: null,
+    });
+  });
+
+  it("refuses a second save request until the first save is recorded or failed", async () => {
+    const { alice, thread } = await seedThread();
+    const id = await newDraft(alice.id, thread.id, null);
+    await completeDraft(db, { draftId: id, ...body("b1") });
+    expect(await requestDraftSave(db, alice.id, id, new Date())).toBe(true);
+    expect(await requestDraftSave(db, alice.id, id, new Date())).toBe(false);
+    expect(await markDraftSaved(db, id, "r-1", new Date())).toBe(true);
+    expect(await requestDraftSave(db, alice.id, id, new Date())).toBe(true);
+    expect(await requestDraftSave(db, alice.id, id, new Date())).toBe(false);
+    await failDraftSave(db, id, "gmail_unavailable");
+    expect(await requestDraftSave(db, alice.id, id, new Date())).toBe(true);
+  });
+
+  it("recordProviderDraftId keeps only the Gmail draft id", async () => {
+    const { alice, thread } = await seedThread();
+    const id = await newDraft(alice.id, thread.id, null);
+    await completeDraft(db, { draftId: id, ...body("b1") });
+    const at = new Date();
+    await requestDraftSave(db, alice.id, id, at);
+    await recordProviderDraftId(db, id, "r-9");
+    expect(await getDraftForUser(db, alice.id, id)).toMatchObject({
+      status: "generated",
+      providerDraftId: "r-9",
+      saveRequestedAt: at,
     });
   });
 

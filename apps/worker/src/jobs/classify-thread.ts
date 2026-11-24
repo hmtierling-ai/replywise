@@ -13,7 +13,6 @@ import {
   upsertThreadInsight,
 } from "@replywise/db";
 import type { JobContext } from "@replywise/queue";
-import { UnrecoverableError } from "bullmq";
 import { safeErrorFields } from "../log-error";
 import {
   FIRST_ATTEMPT,
@@ -21,6 +20,7 @@ import {
   handleAiFailure,
   loadUsableKey,
   rethrowSafely,
+  storePaidResult,
   usageRecorder,
 } from "./generation-shared";
 import { buildThreadInput } from "./thread-text";
@@ -30,10 +30,6 @@ export type ClassifyThreadDeps = Pick<
   GenerationDeps,
   "db" | "encryptor" | "ai" | "logger" | "queue"
 >;
-
-const INSIGHT_WRITE_TRIES = 3;
-const INSIGHT_WRITE_BASE_DELAY_MS = 200;
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function classifyThreadHandler(deps: ClassifyThreadDeps) {
   return async (
@@ -103,17 +99,15 @@ async function classify(
     promptVersion: CLASSIFY_PROMPT_VERSION,
   };
   // The call is paid for: retry the write in-process rather than repeating the call via BullMQ.
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await upsertThreadInsight(deps.db, insight);
-      break;
-    } catch (error) {
-      if (attempt >= INSIGHT_WRITE_TRIES) {
-        deps.logger.warn({ threadId, error: safeErrorFields(error) }, "insight write failed");
-        throw new UnrecoverableError("InsightWriteFailed");
-      }
-      await sleep(INSIGHT_WRITE_BASE_DELAY_MS * attempt);
-    }
+  const written = await storePaidResult(deps, () => upsertThreadInsight(deps.db, insight), {
+    threadId,
+    name: "InsightWriteFailed",
+    logMessage: "insight write failed",
+  });
+  if (!written) {
+    // The user replied after the classified message: no insight, and no draft for it.
+    deps.logger.info({ threadId }, "classification skipped (answered)");
+    return;
   }
   deps.logger.info({ threadId, category }, "thread classified");
 

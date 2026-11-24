@@ -195,6 +195,7 @@ export async function updateDraftBody(
   return rows.length > 0;
 }
 
+/** Refused (false) while an earlier save is still in flight, so one draft never saves twice at once. */
 export async function requestDraftSave(
   db: DbExecutor,
   userId: string,
@@ -204,18 +205,26 @@ export async function requestDraftSave(
   const rows = await db
     .update(replyDrafts)
     .set({ saveRequestedAt: now, error: null, updatedAt: now })
-    .where(and(eq(replyDrafts.id, draftId), eq(replyDrafts.userId, userId), EDITABLE))
+    .where(
+      and(
+        eq(replyDrafts.id, draftId),
+        eq(replyDrafts.userId, userId),
+        EDITABLE,
+        isNull(replyDrafts.saveRequestedAt),
+      ),
+    )
     .returning({ id: replyDrafts.id });
   return rows.length > 0;
 }
 
+/** False when the draft left the editable states (e.g. discarded) while the save ran. */
 export async function markDraftSaved(
   db: DbExecutor,
   draftId: string,
   providerDraftId: string,
   savedAt: Date,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const rows = await db
     .update(replyDrafts)
     .set({
       status: "saved",
@@ -225,6 +234,23 @@ export async function markDraftSaved(
       error: null,
       updatedAt: savedAt,
     })
+    .where(and(eq(replyDrafts.id, draftId), EDITABLE))
+    .returning({ id: replyDrafts.id });
+  return rows.length > 0;
+}
+
+/**
+ * Worker-only (trusted ids). Minimal fallback when markDraftSaved cannot be written: keeps the
+ * Gmail draft id so the next save updates that draft instead of creating a second one.
+ */
+export async function recordProviderDraftId(
+  db: DbExecutor,
+  draftId: string,
+  providerDraftId: string,
+): Promise<void> {
+  await db
+    .update(replyDrafts)
+    .set({ providerDraftId })
     .where(and(eq(replyDrafts.id, draftId), EDITABLE));
 }
 

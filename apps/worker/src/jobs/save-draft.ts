@@ -8,6 +8,7 @@ import {
   getWritingPreferences,
   insertAuditLog,
   markDraftSaved,
+  recordProviderDraftId,
 } from "@replywise/db";
 import {
   buildReplyMime,
@@ -16,7 +17,12 @@ import {
   ProviderHttpError,
   toBase64Url,
 } from "@replywise/mail";
-import { getValidAccessToken, type MailboxDeps } from "@replywise/mailbox";
+import {
+  getValidAccessToken,
+  MailAccountNotFoundError,
+  type MailboxDeps,
+  ReauthRequiredError,
+} from "@replywise/mailbox";
 import type { JobContext } from "@replywise/queue";
 import { UnrecoverableError } from "bullmq";
 import { safeErrorFields } from "../log-error";
@@ -26,6 +32,7 @@ import {
   type GenerationDeps,
   isFinalAttempt,
   rethrowSafely,
+  withWriteRetries,
 } from "./generation-shared";
 
 export type SaveDraftDeps = Pick<GenerationDeps, "db" | "encryptor" | "logger"> & {
@@ -34,9 +41,6 @@ export type SaveDraftDeps = Pick<GenerationDeps, "db" | "encryptor" | "logger"> 
 };
 
 const SAVEABLE = new Set<DraftRow["status"]>(["generated", "edited", "saved"]);
-const RECORD_TRIES = 3;
-const RECORD_BASE_DELAY_MS = 200;
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Writes the reply into the user's Gmail drafts. Drafts only: nothing is ever delivered. */
 export function saveDraftHandler(deps: SaveDraftDeps) {
@@ -98,51 +102,63 @@ async function save(deps: SaveDraftDeps, draftId: string, context: JobContext): 
     const { accessToken } = await getValidAccessToken(deps.mailbox, source.thread.mailAccountId);
     api = deps.gmailDrafts(accessToken);
   } catch (error) {
-    if (errorCode(error) === "gmail_reauth") return giveUp(error);
+    if (error instanceof ReauthRequiredError || error instanceof MailAccountNotFoundError) {
+      return giveUp(error);
+    }
     throw error;
   }
 
-  const threadId = source.thread.providerThreadId;
-  let providerDraftId: string;
-  try {
-    const updated = draft.providerDraftId
-      ? await api.updateDraft(draft.providerDraftId, { raw, threadId })
-      : null;
-    if (updated) {
-      providerDraftId = updated.draftId;
-    } else {
-      try {
-        ({ draftId: providerDraftId } = await api.createDraft({ raw, threadId }));
-      } catch (error) {
-        // A timed-out create may still have created the draft: retrying could duplicate it.
-        if (error instanceof ProviderHttpError && error.status === 0) return giveUp(error);
-        throw error;
-      }
-    }
-  } catch (error) {
-    if (!(error instanceof ProviderHttpError)) throw error;
-    if (!isRetryableGmailError(error)) return giveUp(error);
-    // Keep saveRequestedAt until the final attempt; BullMQ retries with backoff.
+  /** Keeps saveRequestedAt for a BullMQ retry; only the final attempt fails the save. */
+  const retryLater = async (error: ProviderHttpError): Promise<never> => {
     if (isFinalAttempt(context)) await failDraftSave(deps.db, draftId, errorCode(error));
     throw error;
+  };
+
+  const threadId = source.thread.providerThreadId;
+  let updated: { draftId: string } | null = null;
+  if (draft.providerDraftId) {
+    try {
+      // PUT is idempotent: transient failures may be retried.
+      updated = await api.updateDraft(draft.providerDraftId, { raw, threadId });
+    } catch (error) {
+      if (!(error instanceof ProviderHttpError)) throw error;
+      if (!isRetryableGmailError(error)) return giveUp(error);
+      return retryLater(error);
+    }
+  }
+  let providerDraftId: string;
+  if (updated) {
+    providerDraftId = updated.draftId;
+  } else {
+    try {
+      ({ draftId: providerDraftId } = await api.createDraft({ raw, threadId }));
+    } catch (error) {
+      // POST is not idempotent: after a timeout, 5xx or anything else Gmail may already hold the
+      // draft, so only a rate limit (request not processed) is retried.
+      if (error instanceof ProviderHttpError && error.rateLimited) return retryLater(error);
+      return giveUp(error);
+    }
   }
 
   // Gmail now holds the draft: record it in-process rather than repeating the call via BullMQ.
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await markDraftSaved(deps.db, draftId, providerDraftId, new Date());
-      break;
-    } catch (error) {
-      if (attempt >= RECORD_TRIES) {
-        deps.logger.warn(
-          { threadId: source.thread.id, draftId, error: safeErrorFields(error) },
-          "draft save not recorded",
-        );
-        await failDraftSave(deps.db, draftId, "internal").catch(() => undefined);
-        throw new UnrecoverableError("DraftRecordFailed");
-      }
-      await sleep(RECORD_BASE_DELAY_MS * attempt);
-    }
+  let recorded: boolean;
+  try {
+    recorded = await withWriteRetries(() =>
+      markDraftSaved(deps.db, draftId, providerDraftId, new Date()),
+    );
+  } catch (error) {
+    deps.logger.warn(
+      { threadId: source.thread.id, draftId, error: safeErrorFields(error) },
+      "draft save not recorded",
+    );
+    // Keep at least the Gmail id, so the next save updates that draft instead of adding one.
+    await recordProviderDraftId(deps.db, draftId, providerDraftId).catch(() => undefined);
+    await failDraftSave(deps.db, draftId, "internal").catch(() => undefined);
+    throw new UnrecoverableError("DraftRecordFailed");
+  }
+  if (!recorded) {
+    deps.logger.info({ draftId }, "draft discarded during save");
+    return;
   }
   await insertAuditLog(deps.db, {
     userId: source.userId,
@@ -158,8 +174,9 @@ async function save(deps: SaveDraftDeps, draftId: string, context: JobContext): 
 
 /** The message being answered: the one the draft was made for, else the newest from someone else. */
 function replyTarget(draft: DraftRow, source: ClassificationSource) {
+  // Never answer one of the user's own messages.
   const chosen = draft.forMessageId
-    ? source.messages.find((m) => m.id === draft.forMessageId)
+    ? source.messages.find((m) => m.id === draft.forMessageId && !m.isFromUser)
     : undefined;
   return chosen ?? source.messages.findLast((m) => !m.isFromUser) ?? null;
 }
