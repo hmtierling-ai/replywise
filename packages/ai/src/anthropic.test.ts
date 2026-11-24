@@ -29,8 +29,8 @@ const input: ClassifyInput = {
 
 function fakeClient(create: (params: unknown) => unknown, list?: () => unknown) {
   return {
-    beta: { messages: { create: vi.fn(async (p: unknown) => create(p)) } },
-    models: { list: vi.fn(async () => (list ? list() : { data: [] })) },
+    beta: { messages: { create: vi.fn(async (p: unknown, _o?: unknown) => create(p)) } },
+    models: { list: vi.fn(async (_p?: unknown, _o?: unknown) => (list ? list() : { data: [] })) },
   } as unknown as Anthropic;
 }
 
@@ -101,6 +101,14 @@ describe("createAnthropicProvider.classify", () => {
     const messages = params.messages as Array<{ role: string; content: string }>;
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toContain("Can you sign by Friday?");
+  });
+
+  it("disables SDK-level retries so BullMQ alone retries (no multiplied billed attempts)", async () => {
+    const client = fakeClient(() => ok);
+    await createAnthropicProvider({ client: () => client }).classify(opusCtx, input);
+    expect(vi.mocked(client.beta.messages.create).mock.calls[0]?.[1]).toMatchObject({
+      maxRetries: 0,
+    });
   });
 
   it("omits the server-side fallback for Haiku and passes the model through", async () => {
@@ -223,5 +231,14 @@ describe("createAnthropicProvider.validateKey", () => {
         ),
     });
     expect(await down.validateKey("sk-ant-x")).toEqual({ ok: false, reason: "unreachable" });
+  });
+
+  it("fails fast: one 10 s attempt, no SDK retries", async () => {
+    const client = fakeClient(() => ok);
+    await createAnthropicProvider({ client: () => client }).validateKey("sk-ant-x");
+    expect(vi.mocked(client.models.list).mock.calls[0]).toEqual([
+      { limit: 1 },
+      { timeout: 10_000, maxRetries: 0 },
+    ]);
   });
 });

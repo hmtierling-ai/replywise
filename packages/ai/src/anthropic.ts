@@ -19,6 +19,12 @@ import type { AiProvider } from "./types";
 export const CLASSIFY_MAX_TOKENS = 4_096;
 /** Models that accept the server-side refusal fallback (Haiku 5.5 does not). */
 const FALLBACK_MODELS = new Set(["claude-opus-5-5"]);
+/**
+ * BullMQ already retries retryable AI errors with backoff; SDK retries on top would multiply
+ * possibly billed attempts (e.g. a timeout after the model ran).
+ */
+const CLASSIFY_REQUEST_OPTIONS = { maxRetries: 0 };
+const VALIDATE_REQUEST_OPTIONS = { timeout: 10_000, maxRetries: 0 };
 
 function mapError(error: unknown): Error {
   if (
@@ -44,14 +50,15 @@ export function createAnthropicProvider(
 ): AiProvider {
   const clientFor =
     options.client ??
-    ((apiKey: string) => new Anthropic({ apiKey, maxRetries: 2, timeout: 60_000 }));
+    ((apiKey: string) => new Anthropic({ apiKey, maxRetries: 0, timeout: 60_000 }));
 
   return {
     id: "anthropic",
 
     async validateKey(apiKey) {
       try {
-        await clientFor(apiKey).models.list({ limit: 1 });
+        // Saving a key waits on this call: fail fast instead of SDK retries with long timeouts.
+        await clientFor(apiKey).models.list({ limit: 1 }, VALIDATE_REQUEST_OPTIONS);
         return { ok: true };
       } catch (error) {
         if (
@@ -73,16 +80,19 @@ export function createAnthropicProvider(
       let response: Awaited<ReturnType<typeof client.beta.messages.create>>;
       try {
         // `create` (not `parse`) so usage is still recorded when the output fails to parse.
-        response = await client.beta.messages.create({
-          model: ctx.model,
-          max_tokens: CLASSIFY_MAX_TOKENS,
-          ...fallback,
-          system: [
-            { type: "text", text: CLASSIFY_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
-          ],
-          messages: [{ role: "user", content: buildClassifyPrompt(input) }],
-          output_config: { effort: "low", format: betaZodOutputFormat(ClassifyOutputSchema) },
-        });
+        response = await client.beta.messages.create(
+          {
+            model: ctx.model,
+            max_tokens: CLASSIFY_MAX_TOKENS,
+            ...fallback,
+            system: [
+              { type: "text", text: CLASSIFY_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+            ],
+            messages: [{ role: "user", content: buildClassifyPrompt(input) }],
+            output_config: { effort: "low", format: betaZodOutputFormat(ClassifyOutputSchema) },
+          },
+          CLASSIFY_REQUEST_OPTIONS,
+        );
       } catch (error) {
         throw mapError(error);
       }
