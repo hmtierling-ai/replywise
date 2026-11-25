@@ -68,9 +68,6 @@ async function save(deps: SaveDraftDeps, draftId: string, context: JobContext): 
   const source = await getThreadForClassification(deps.db, draft.threadId);
   if (!source) return; // the thread (and its drafts) went away
 
-  const target = replyTarget(draft, source);
-  if (!target) return failDraftSave(deps.db, draftId, "no_recipient");
-
   /** Fails the save with a fixed code and stops retries. */
   const giveUp = async (error: unknown): Promise<never> => {
     // Best effort: a DB error here must not become retryable and re-run createDraft.
@@ -81,6 +78,12 @@ async function save(deps: SaveDraftDeps, draftId: string, context: JobContext): 
     );
     throw new UnrecoverableError(error instanceof Error ? error.name : "Error");
   };
+
+  // Only Gmail drafts exist here: never call another provider's API.
+  if (source.provider !== "gmail") return giveUp(new Error("unsupported_provider"));
+
+  const target = replyTarget(draft, source);
+  if (!target) return failDraftSave(deps.db, draftId, "no_recipient");
 
   let raw: string;
   try {

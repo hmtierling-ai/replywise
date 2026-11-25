@@ -413,6 +413,7 @@ describe("insights, classification source and usage", () => {
     const source = await getThreadForClassification(db, thread.id);
     expect(source?.userId).toBe(alice.id);
     expect(source?.mailboxEmail).toBe("alice@gmail.com");
+    expect(source?.provider).toBe("gmail");
     expect(source?.thread).toMatchObject({
       id: thread.id,
       subject: "Hello",

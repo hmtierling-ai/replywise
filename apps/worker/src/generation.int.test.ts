@@ -532,7 +532,8 @@ describe("saveDraftHandler", () => {
       return {
         ...api,
         async createDraft(input) {
-          await discardDraft(db, s.user.id, draftId);
+          // Only a stale request can be discarded, so move the clock past SAVE_STALE_MS.
+          await discardDraft(db, s.user.id, draftId, new Date(Date.now() + SAVE_STALE_MS + 1000));
           return api.createDraft(input);
         },
       };
@@ -568,6 +569,47 @@ describe("saveDraftHandler", () => {
     const mime = decodeRaw(gmail.calls.create[0]?.raw ?? "");
     expect(mime).toMatch(/^To: .*ada@client\.com/m);
     expect(mime).toContain("In-Reply-To: <m1@client.com>");
+  });
+
+  it("replies to the message the draft was made for, even when newer mail arrived", async () => {
+    const { db } = handle;
+    const s = await seed();
+    const draftId = await generatedDraft(s);
+    await insertMessage(db, s.thread.id, s.account.id, {
+      fromAddress: { name: "Ada", address: "ada@client.com" },
+      internetMessageId: "<m2@client.com>",
+      sentAt: new Date(Date.now() - HOUR_MS / 2),
+    });
+    await requestDraftSave(db, s.user.id, draftId, new Date());
+    const gmail = fakeGmailDrafts();
+    await saveDraftHandler(saveDeps(gmail.factory))({ draftId }, ctx);
+    const mime = decodeRaw(gmail.calls.create[0]?.raw ?? "");
+    expect(mime).toContain("In-Reply-To: <m1@client.com>");
+    expect(mime).not.toContain("In-Reply-To: <m2@client.com>");
+  });
+
+  it("never calls Gmail for a non-Gmail mailbox, and fails the save", async () => {
+    const { db } = handle;
+    const s = await seed();
+    const draftId = await generatedDraft(s);
+    await db
+      .update(mailAccounts)
+      .set({ provider: "outlook" })
+      .where(eq(mailAccounts.id, s.account.id));
+    await requestDraftSave(db, s.user.id, draftId, new Date());
+    const gmail = fakeGmailDrafts();
+    const rejection = await saveDraftHandler(saveDeps(gmail.factory))({ draftId }, ctx).catch(
+      (e: unknown) => e,
+    );
+    expect(rejection).toBeInstanceOf(UnrecoverableError);
+    expect(gmail.calls.tokens).toHaveLength(0);
+    expect(gmail.calls.create).toHaveLength(0);
+    expect(gmail.calls.update).toHaveLength(0);
+    expect(await getDraftForWorker(db, draftId)).toMatchObject({
+      status: "generated",
+      saveRequestedAt: null,
+      error: "internal",
+    });
   });
 
   it("fails with no_recipient when the reply target's address is invalid", async () => {

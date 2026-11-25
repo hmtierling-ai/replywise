@@ -22,6 +22,7 @@ import {
   getWritingPreferences,
   hasDraftForMessage,
   hasFreshPendingDraft,
+  latestInboundMessageId,
   listDraftsForThread,
   markDraftSaved,
   PENDING_STALE_MS,
@@ -248,8 +249,9 @@ describe("draft state guards", () => {
     const { alice, thread } = await seedThread();
     const id = await newDraft(alice.id, thread.id, null);
     await completeDraft(db, { draftId: id, ...body("b1") });
-    await requestDraftSave(db, alice.id, id, new Date());
-    await discardDraft(db, alice.id, id);
+    // Only a stale request can be discarded now; the save still finishes after the discard.
+    await requestDraftSave(db, alice.id, id, new Date(Date.now() - SAVE_STALE_MS - 1000));
+    expect(await discardDraft(db, alice.id, id)).toBe(true);
     expect(await markDraftSaved(db, id, "r-1", new Date())).toBe(false);
     expect(await getDraftForUser(db, alice.id, id)).toMatchObject({
       status: "discarded",
@@ -316,6 +318,33 @@ describe("draft state guards", () => {
     await requestDraftSave(db, alice.id, id, new Date());
     expect(await updateDraftBody(db, alice.id, id, Buffer.from("x"))).toBe(false);
     expect((await getDraftForUser(db, alice.id, id))?.bodyCiphertext.toString()).toBe("b1");
+  });
+
+  it("refuses to discard while a save is in flight, and allows it once the save is stale", async () => {
+    const { alice, thread } = await seedThread();
+    const id = await newDraft(alice.id, thread.id, null);
+    await completeDraft(db, { draftId: id, ...body("b1") });
+    const t0 = new Date("2026-11-24T12:00:00Z");
+    expect(await requestDraftSave(db, alice.id, id, t0)).toBe(true);
+    const fresh = new Date(t0.getTime() + SAVE_STALE_MS - 1000);
+    expect(await discardDraft(db, alice.id, id, fresh)).toBe(false);
+    expect((await getDraftForUser(db, alice.id, id))?.status).toBe("generated");
+    const stale = new Date(t0.getTime() + SAVE_STALE_MS + 1000);
+    expect(await discardDraft(db, alice.id, id, stale)).toBe(true);
+    expect((await getDraftForUser(db, alice.id, id))?.status).toBe("discarded");
+  });
+
+  it("clears an old save error when the body is edited", async () => {
+    const { alice, thread } = await seedThread();
+    const id = await newDraft(alice.id, thread.id, null);
+    await completeDraft(db, { draftId: id, ...body("b1") });
+    await failDraftSave(db, id, "gmail_unavailable");
+    expect((await getDraftForUser(db, alice.id, id))?.error).toBe("gmail_unavailable");
+    expect(await updateDraftBody(db, alice.id, id, Buffer.from("b2"))).toBe(true);
+    expect(await getDraftForUser(db, alice.id, id)).toMatchObject({
+      status: "edited",
+      error: null,
+    });
   });
 
   it("does not let another user save-request or discard a draft", async () => {
@@ -385,6 +414,27 @@ describe("writing preferences and auto-draft", () => {
     expect(await setAutoDraft(db, bob.id, box.id, true)).toBe(false);
     expect(await setAutoDraft(db, alice.id, box.id, true)).toBe(true);
     expect(await getAutoDraftSetting(db, box.id)).toBe(true);
+  });
+
+  it("finds the newest inbound message, scoped to the owner", async () => {
+    const { alice, bob, box, thread, message } = await seedThread({ withBob: true });
+    const base = Date.now();
+    const newest = await insertMessage(db, thread.id, box.id, {
+      isFromUser: false,
+      sentAt: new Date(base + 2000),
+    });
+    await insertMessage(db, thread.id, box.id, { isFromUser: true, sentAt: new Date(base + 5000) });
+    expect(message.id).not.toBe(newest.id);
+    expect(await latestInboundMessageId(db, alice.id, thread.id)).toBe(newest.id);
+    expect(await latestInboundMessageId(db, bob.id, thread.id)).toBeNull();
+  });
+
+  it("returns null when every message is from the user", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    const thread = await insertThread(db, box.id);
+    await insertMessage(db, thread.id, box.id, { isFromUser: true });
+    expect(await latestInboundMessageId(db, alice.id, thread.id)).toBeNull();
   });
 
   it("checks thread ownership", async () => {

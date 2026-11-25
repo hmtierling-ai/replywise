@@ -2,7 +2,7 @@ import { type AiProviderId, DEFAULT_AI_MODELS, type ReplyTone } from "@replywise
 import { and, desc, eq, gte, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import type { DbExecutor } from "../client";
 import { replyDrafts, threadSummaries, userPreferences } from "../schema/ai";
-import { mailAccounts, threads } from "../schema/mail";
+import { mailAccounts, messages, threads } from "../schema/mail";
 
 export interface ThreadSummary {
   status: "pending" | "ready" | "failed";
@@ -235,7 +235,7 @@ export async function updateDraftBody(
 ): Promise<boolean> {
   const rows = await db
     .update(replyDrafts)
-    .set({ bodyCiphertext, status: "edited", updatedAt: now })
+    .set({ bodyCiphertext, status: "edited", error: null, updatedAt: now })
     .where(
       and(
         eq(replyDrafts.id, draftId),
@@ -317,16 +317,20 @@ export async function failDraftSave(db: DbExecutor, draftId: string, error: stri
     .where(and(eq(replyDrafts.id, draftId), EDITABLE));
 }
 
-/** Discarding a pending draft makes a later completeDraft a no-op. */
+/**
+ * Discarding a pending draft makes a later completeDraft a no-op. Refused (false) while a
+ * non-stale save to Gmail is in flight, so a discard never races the worker.
+ */
 export async function discardDraft(
   db: DbExecutor,
   userId: string,
   draftId: string,
+  now: Date = new Date(),
 ): Promise<boolean> {
   const rows = await db
     .update(replyDrafts)
-    .set({ status: "discarded", updatedAt: new Date() })
-    .where(and(eq(replyDrafts.id, draftId), eq(replyDrafts.userId, userId)))
+    .set({ status: "discarded", updatedAt: now })
+    .where(and(eq(replyDrafts.id, draftId), eq(replyDrafts.userId, userId), noSaveInFlight(now)))
     .returning({ id: replyDrafts.id });
   return rows.length > 0;
 }
@@ -423,6 +427,29 @@ export async function setAutoDraft(
     .where(and(eq(mailAccounts.id, mailAccountId), eq(mailAccounts.userId, userId)))
     .returning({ id: mailAccounts.id });
   return rows.length > 0;
+}
+
+/** Newest message in the thread not sent by the user (user-scoped via the mailbox owner), or null. */
+export async function latestInboundMessageId(
+  db: DbExecutor,
+  userId: string,
+  threadId: string,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .innerJoin(threads, eq(messages.threadId, threads.id))
+    .innerJoin(mailAccounts, eq(threads.mailAccountId, mailAccounts.id))
+    .where(
+      and(
+        eq(messages.threadId, threadId),
+        eq(mailAccounts.userId, userId),
+        eq(messages.isFromUser, false),
+      ),
+    )
+    .orderBy(desc(messages.sentAt), desc(messages.id))
+    .limit(1);
+  return row?.id ?? null;
 }
 
 export async function threadBelongsToUser(

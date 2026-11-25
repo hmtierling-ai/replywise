@@ -3,6 +3,7 @@ import {
   type AiTask,
   DEFAULT_AI_MODELS,
   type InboxCategory,
+  type MailProviderId,
 } from "@replywise/core";
 import { and, eq, gte, sql } from "drizzle-orm";
 import type { DbExecutor } from "../client";
@@ -315,6 +316,7 @@ export interface ClassificationSource {
   thread: { id: string; subject: string; mailAccountId: string; providerThreadId: string };
   userId: string;
   mailboxEmail: string;
+  provider: MailProviderId;
   /** Oldest first. */
   messages: Array<typeof messages.$inferSelect>;
 }
@@ -334,6 +336,7 @@ export async function getThreadForClassification(
       },
       userId: mailAccounts.userId,
       mailboxEmail: mailAccounts.emailAddress,
+      provider: mailAccounts.provider,
     })
     .from(threads)
     .innerJoin(mailAccounts, eq(threads.mailAccountId, mailAccounts.id))
