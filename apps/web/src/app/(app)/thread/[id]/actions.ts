@@ -12,6 +12,7 @@ import {
   getDraftForUser,
   getWritingPreferences,
   hasFreshPendingDraft,
+  latestInboundMessageId,
   requestDraftSave,
   requestSummary,
   threadBelongsToUser,
@@ -83,7 +84,8 @@ export async function generateDraftAction(formData: FormData): Promise<void> {
       userId: user.id,
       tone,
       instructions,
-      forMessageId: null,
+      // The message being answered: pinned now so newer mail does not change the reply target.
+      forMessageId: await latestInboundMessageId(getDb(), user.id, threadId),
       // Placeholder, never decrypted: completeDraft replaces it (AAD is per draft id, unknown before insert).
       placeholderCiphertext: await getEncryptor().encrypt("", aad.replyDraft("pending")),
       aiProvider: "anthropic",
@@ -133,7 +135,13 @@ export async function saveDraftToGmailAction(formData: FormData): Promise<void> 
   // not rewritten, so a generated draft stays "generated".
   if (body.trim()) {
     const enc = getEncryptor();
-    const current = await enc.decryptString(draft.bodyCiphertext, aad.replyDraft(draft.id));
+    let current: string;
+    try {
+      current = await enc.decryptString(draft.bodyCiphertext, aad.replyDraft(draft.id));
+    } catch {
+      // Unreadable stored body: do not save something we cannot compare or trust.
+      return;
+    }
     if (current !== body) {
       await updateDraftBody(
         getDb(),

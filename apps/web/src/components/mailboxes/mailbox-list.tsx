@@ -85,8 +85,9 @@ export async function MailboxList() {
                       id={`auto-hint-${account.id}`}
                       className="mt-1 text-xs text-muted-foreground"
                     >
-                      Writes a draft with your key when mail needs a reply. It stays in Replywise
-                      until you save it to Gmail.
+                      Writes a draft with your key for Needs Reply mail from the last 7 days,
+                      including when classification first runs. It stays in Replywise until you save
+                      it to Gmail.
                     </p>
                   </div>
                 ) : null}
