@@ -235,7 +235,7 @@ describe("createAnthropicProvider.summarize / draftReply", () => {
     });
     const params = paramsOf(client);
     expect(params.output_config).toMatchObject({ effort: "medium" });
-    expect(params.max_tokens).toBe(4096);
+    expect(params.max_tokens).toBe(8192);
     for (const key of ["tools", "thinking", "temperature", "top_p", "top_k"]) {
       expect(params).not.toHaveProperty(key);
     }

@@ -33,7 +33,7 @@ const FALLBACK_MODELS = new Set(["claude-opus-5-5"]);
  * possibly billed attempts (e.g. a timeout after the model ran).
  */
 const REQUEST_OPTIONS = { maxRetries: 0 };
-export const SUMMARY_MAX_TOKENS = 4_096;
+export const SUMMARY_MAX_TOKENS = 8_192;
 export const DRAFT_MAX_TOKENS = 8_192;
 const VALIDATE_REQUEST_OPTIONS = { timeout: 10_000, maxRetries: 0 };
 
