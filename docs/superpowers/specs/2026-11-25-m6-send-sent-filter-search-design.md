@@ -105,6 +105,14 @@ send_failed ──Edit──▶ edited          send_failed (send_rejected / sav
 - E2E (Playwright, fake Gmail): Send → Undo → edit; Send → sent state; Other view and hidden-from-inbox; Sent view; local search; Gmail search + import (fake provider).
 - Manual: one real reply sent from Replywise to the user's own address, verified in Gmail Sent and threaded correctly.
 
-## 7. Out of scope
+## 7. Plan-time clarifications (2026-11-26)
+
+- §2.2 step 5: stuck-send recovery runs as its own minutely maintenance job; `scheduled` rows more than 10 minutes overdue fail as `internal` instead of being re-enqueued.
+- §2.4: "Try again" is offered for every `send_failed` code that proves nothing was sent (`send_rejected`, save-error codes, `no_recipient`, `internal`), not only `send_rejected`.
+- §4: the Other view lists `INBOX` threads only.
+- §5.1: results may also show a fourth location, "Archived" (synced threads with neither `INBOX` nor `SENT`).
+- §5.2: an imported thread that lands in the inbox within the 7-day window is auto-classified by the normal minutely scan (unless it is Other); older or non-inbox imports are not.
+
+## 8. Out of scope
 
 New-message compose, reply-all, forward, attachments, scheduled send beyond the 10 s undo, Outlook sending/search/import, local full-text body search, a setting to choose hidden Gmail tabs.
