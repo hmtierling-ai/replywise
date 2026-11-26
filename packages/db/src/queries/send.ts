@@ -158,7 +158,10 @@ export async function clearSendAttempted(db: DbExecutor, draftId: string): Promi
     );
 }
 
-/** Worker-only. Keeps the Gmail draft id so a retry updates that draft instead of adding one. */
+/**
+ * Worker-only. Keeps the Gmail draft id so a retry updates that draft instead of adding one.
+ * A no-op once the send was attempted: the draft being sent must never be repointed.
+ */
 export async function recordSendDraftId(
   db: DbExecutor,
   draftId: string,
@@ -167,7 +170,13 @@ export async function recordSendDraftId(
   await db
     .update(replyDrafts)
     .set({ providerDraftId })
-    .where(and(eq(replyDrafts.id, draftId), eq(replyDrafts.status, "sending")));
+    .where(
+      and(
+        eq(replyDrafts.id, draftId),
+        eq(replyDrafts.status, "sending"),
+        isNull(replyDrafts.error),
+      ),
+    );
 }
 
 /** Worker-only. sending → sent. */
@@ -191,6 +200,49 @@ export async function failSend(db: DbExecutor, draftId: string, error: string): 
     .update(replyDrafts)
     .set({ status: "send_failed", error, updatedAt: new Date() })
     .where(and(eq(replyDrafts.id, draftId), eq(replyDrafts.status, "sending")))
+    .returning({ id: replyDrafts.id });
+  return rows.length > 0;
+}
+
+/**
+ * Worker-only. sending → send_failed for a failure before the Gmail send call. False (no-op) once
+ * any run has marked the attempt: that run owns the outcome, and a resendable code written over
+ * an in-flight or finished send would let the user send the reply twice.
+ */
+export async function failSendBeforeAttempt(
+  db: DbExecutor,
+  draftId: string,
+  error: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(replyDrafts)
+    .set({ status: "send_failed", error, updatedAt: new Date() })
+    .where(
+      and(
+        eq(replyDrafts.id, draftId),
+        eq(replyDrafts.status, "sending"),
+        isNull(replyDrafts.error),
+      ),
+    )
+    .returning({ id: replyDrafts.id });
+  return rows.length > 0;
+}
+
+/**
+ * Worker-only. Gmail confirmed the send but the row was failed meanwhile (stuck scan or a losing
+ * run): send_failed → sent, so it can never be scheduled again. Never touches a row the user has
+ * already reopened or re-confirmed.
+ */
+export async function markSentAfterFailure(
+  db: DbExecutor,
+  draftId: string,
+  providerMessageId: string,
+  sentAt: Date,
+): Promise<boolean> {
+  const rows = await db
+    .update(replyDrafts)
+    .set({ status: "sent", sentAt, providerMessageId, error: null, updatedAt: sentAt })
+    .where(and(eq(replyDrafts.id, draftId), eq(replyDrafts.status, "send_failed")))
     .returning({ id: replyDrafts.id });
   return rows.length > 0;
 }

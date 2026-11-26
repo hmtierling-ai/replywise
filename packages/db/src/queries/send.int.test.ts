@@ -16,12 +16,14 @@ import {
   countRecentSends,
   expireScheduledSends,
   failSend,
+  failSendBeforeAttempt,
   failStuckSends,
   getDraftMailbox,
   hasActiveSend,
   listOverdueScheduledSends,
   markSendAttempted,
   markSent,
+  markSentAfterFailure,
   recordSendDraftId,
   reopenFailedSend,
   SEND_ATTEMPTED,
@@ -173,6 +175,54 @@ describe("worker transitions", () => {
       status: "send_failed",
       error: "send_rejected",
     });
+  });
+});
+
+describe("writes that must not touch an attempted send", () => {
+  it("leaves a marked row alone when a losing run fails or repoints it before the send call", async () => {
+    const { alice, thread } = await seed();
+    const id = await draft(alice.id, thread.id, {
+      status: "sending",
+      error: SEND_ATTEMPTED,
+      providerDraftId: "r-1",
+    });
+    expect(await failSendBeforeAttempt(db, id, "gmail_unavailable")).toBe(false);
+    await recordSendDraftId(db, id, "r-2");
+    expect(await getDraftForUser(db, alice.id, id)).toMatchObject({
+      status: "sending",
+      error: SEND_ATTEMPTED,
+      providerDraftId: "r-1",
+    });
+
+    const fresh = await draft(alice.id, thread.id, { status: "sending" });
+    await recordSendDraftId(db, fresh, "r-3");
+    expect(await failSendBeforeAttempt(db, fresh, "gmail_reauth")).toBe(true);
+    expect(await getDraftForUser(db, alice.id, fresh)).toMatchObject({
+      status: "send_failed",
+      error: "gmail_reauth",
+      providerDraftId: "r-3",
+    });
+  });
+
+  it("records a confirmed send over a failure written meanwhile, never over a new send", async () => {
+    const { alice, thread } = await seed();
+    const sentAt = at(1_000);
+    const failed = await draft(alice.id, thread.id, {
+      status: "send_failed",
+      error: "gmail_unavailable",
+    });
+    expect(await markSentAfterFailure(db, failed, "msg-1", sentAt)).toBe(true);
+    expect(await getDraftForUser(db, alice.id, failed)).toMatchObject({
+      status: "sent",
+      providerMessageId: "msg-1",
+      sentAt,
+      error: null,
+    });
+    for (const status of ["scheduled", "sending", "edited"] as const) {
+      const other = await draft(alice.id, thread.id, { status });
+      expect(await markSentAfterFailure(db, other, "msg-2", sentAt)).toBe(false);
+      expect((await getDraftForUser(db, alice.id, other))?.status).toBe(status);
+    }
   });
 });
 

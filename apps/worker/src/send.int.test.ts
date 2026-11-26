@@ -333,6 +333,55 @@ describe("sendDraftHandler", () => {
     expect((await getDraftForWorker(handle.db, s.draftId))?.status).toBe("sending");
   });
 
+  it("never fails a send another run already attempted when its own draft write fails", async () => {
+    const s = await seed();
+    // Run B passed its checks; run A marks the attempt while B writes the Gmail draft, then B's
+    // write fails.
+    const factory: GmailDraftsFactory = () => ({
+      async createDraft() {
+        await handle.db
+          .update(replyDrafts)
+          .set({ error: SEND_ATTEMPTED })
+          .where(eq(replyDrafts.id, s.draftId));
+        throw new ProviderHttpError(500, "/x");
+      },
+      async updateDraft() {
+        throw new Error("unexpected");
+      },
+    });
+    const sender = fakeSender();
+    await expect(
+      handler({ factory, calls: { create: 0, update: [] } }, sender)({ draftId: s.draftId }, first),
+    ).rejects.toBeInstanceOf(UnrecoverableError);
+    expect(await getDraftForWorker(handle.db, s.draftId)).toMatchObject({
+      status: "sending",
+      error: SEND_ATTEMPTED,
+      providerDraftId: null,
+    });
+    expect(sender.calls).toEqual([]);
+    expect(await auditActions()).toEqual([]);
+  });
+
+  it("records a confirmed send even when the row was failed while the call ran", async () => {
+    const s = await seed();
+    const factory: GmailSendFactory = () => ({
+      async sendDraft() {
+        await handle.db
+          .update(replyDrafts)
+          .set({ status: "send_failed", error: "gmail_unavailable" })
+          .where(eq(replyDrafts.id, s.draftId));
+        return { messageId: "msg-9", threadId: "gmail-thread" };
+      },
+    });
+    await handler(fakeDrafts(), { factory, calls: [] })({ draftId: s.draftId }, first);
+    expect(await getDraftForWorker(handle.db, s.draftId)).toMatchObject({
+      status: "sent",
+      providerMessageId: "msg-9",
+      error: null,
+    });
+    expect((await auditActions()).map((a) => a.action)).toEqual(["draft.sent"]);
+  });
+
   it("fails with no_recipient when nobody else wrote in the thread", async () => {
     const s = await seed();
     await handle.db

@@ -2,10 +2,12 @@ import {
   claimSend,
   clearSendAttempted,
   failSend,
+  failSendBeforeAttempt,
   getDraftForWorker,
   getThreadForClassification,
   markSendAttempted,
   markSent,
+  markSentAfterFailure,
   markThreadAnswered,
   recordSendDraftId,
   SEND_DELAY_MS,
@@ -87,19 +89,41 @@ async function deliver(
   if (!source) return; // the thread is gone, and its drafts with it
   const meta = { draftId, threadId: source.thread.id, mailAccountId: source.thread.mailAccountId };
 
-  /** Ends the send with a fixed code. Never retried. */
-  const stop = async (code: string, error?: unknown): Promise<never> => {
-    await failSend(deps.db, draftId, code).catch(() => undefined);
+  /**
+   * Ends the send with a fixed code. Never retried. Before the marker, the failure is written only
+   * while no run has marked the attempt (`failSendBeforeAttempt`): a losing concurrent run must
+   * never put a resendable code on a send that is in flight or done. The audit entry is written
+   * only when this run's write applied; otherwise the row's owner (or the stuck scan) writes it.
+   */
+  const stop = async (
+    phase: "before_attempt" | "after_attempt",
+    code: string,
+    error?: unknown,
+  ): Promise<never> => {
+    const errorFields = error === undefined ? {} : { error: safeErrorFields(error) };
+    let applied = false;
+    try {
+      applied =
+        phase === "before_attempt"
+          ? await failSendBeforeAttempt(deps.db, draftId, code)
+          : await failSend(deps.db, draftId, code);
+    } catch (writeError) {
+      deps.logger.warn(
+        { ...meta, code, writeError: safeErrorFields(writeError) },
+        "draft send failure not recorded",
+      );
+    }
+    if (!applied) {
+      deps.logger.info({ ...meta, code, ...errorFields }, "draft send failure left to its owner");
+      throw new UnrecoverableError(code);
+    }
     await writeSendAudit(deps, source.userId, "draft.send_failed", { ...meta, error: code });
-    deps.logger.warn(
-      { ...meta, code, ...(error === undefined ? {} : { error: safeErrorFields(error) }) },
-      "draft send failed",
-    );
+    deps.logger.warn({ ...meta, code, ...errorFields }, "draft send failed");
     throw new UnrecoverableError(code);
   };
 
   // Gmail only: never another provider's API.
-  if (source.provider !== "gmail") return stop("internal");
+  if (source.provider !== "gmail") return stop("before_attempt", "internal");
 
   // 1. The Gmail draft must hold exactly this body. Nothing has been sent yet: a rate limit is
   //    retried, any other failure ends the send with the M5 save error code.
@@ -119,10 +143,10 @@ async function deliver(
     }
   } catch (error) {
     if (error instanceof ProviderHttpError && error.rateLimited) {
-      if (isFinalAttempt(context)) return stop("gmail_unavailable", error);
+      if (isFinalAttempt(context)) return stop("before_attempt", "gmail_unavailable", error);
       throw error;
     }
-    return stop(errorCode(error), error);
+    return stop("before_attempt", errorCode(error), error);
   }
 
   // 2. Mark first, so no later or concurrent run can ever repeat the send call.
@@ -143,25 +167,30 @@ async function deliver(
         // The marker stays: the stuck scan fails the row as unconfirmed, never re-sends.
         throw new UnrecoverableError("SendMarkerNotCleared");
       }
-      if (isFinalAttempt(context)) return stop("gmail_unavailable", error);
+      // The marker is cleared, so this fails the row only while no other run has marked it.
+      if (isFinalAttempt(context)) return stop("before_attempt", "gmail_unavailable", error);
       throw error;
     }
     const rejected =
       error instanceof ProviderHttpError && error.status >= 400 && error.status < 500;
-    return stop(rejected ? "send_rejected" : "send_unconfirmed", error);
+    return stop("after_attempt", rejected ? "send_rejected" : "send_unconfirmed", error);
   }
 
   // 3. Gmail accepted it. Record in-process: a BullMQ retry would send again.
-  let recorded: boolean;
   try {
-    recorded = await withWriteRetries(() => markSent(deps.db, draftId, messageId, new Date()));
+    const sentAt = new Date();
+    const recorded = await withWriteRetries(() => markSent(deps.db, draftId, messageId, sentAt));
+    if (!recorded) {
+      // The row was failed while the call ran (stuck scan). The reply did go out: record it, so
+      // a resendable failure code can never let the user send it again.
+      const fixed = await withWriteRetries(() =>
+        markSentAfterFailure(deps.db, draftId, messageId, sentAt),
+      );
+      deps.logger.warn({ ...meta, fixed }, "draft sent after its row was failed");
+    }
   } catch (error) {
     deps.logger.warn({ ...meta, error: safeErrorFields(error) }, "draft send not recorded");
     throw new UnrecoverableError("SendRecordFailed");
-  }
-  if (!recorded) {
-    // The stuck scan failed the row while the call ran. The reply did go out.
-    deps.logger.warn(meta, "draft sent but the row was no longer sending");
   }
   await markThreadAnswered(deps.db, source.thread.id).catch((error: unknown) => {
     deps.logger.warn({ ...meta, error: safeErrorFields(error) }, "thread not marked answered");
