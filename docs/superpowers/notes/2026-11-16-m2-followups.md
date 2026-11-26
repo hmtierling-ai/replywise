@@ -89,7 +89,7 @@ The final whole-branch review verdict was "ready to merge with fixes"; the fixes
 - One in-flight summary and one in-flight generated draft per thread; repeated clicks while one is fresh are ignored (no duplicate paid calls).
 - Reply recipients are validated strictly (ASCII local@domain); internationalised addresses are refused with 'There is no message from someone else to reply to.' rather than risk header injection.
 - The reply MIME module is `packages/mail/src/mime/replyMime.ts` (not `reply.ts`) because the no-send guard rejects `/reply` paths.
-- Deferred: a Redis outage at web cold start can still hang an enqueue until the 5-minute stale window; per-user rate limits on Summarize/Generate remain M6.
+- Deferred: a Redis outage at web cold start can still hang an enqueue until the 5-minute stale window; per-user rate limits on Summarize/Generate moved to M7, where hardening now lives.
 
 ## M6 decisions to revisit
 

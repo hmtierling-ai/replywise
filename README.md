@@ -106,7 +106,7 @@ Open a thread and click **Summarize** for a short AI summary, or choose a tone, 
 
 - **Send (Gmail only).** Under a draft, click **Send…**. The dialog shows the recipient, the subject and the start of the reply; **Send now** waits 10 seconds with an **Undo** button, then Replywise saves the Gmail draft and sends it with Gmail's send-draft call. Nothing is ever sent without that click: AI jobs and auto-draft never send. At most 20 sends per hour. If Gmail's answer is lost (timeout, 5xx), the reply is marked "may or may not have gone out" and is never retried automatically — check Gmail's Sent folder, then choose **Edit**.
 - **Sent.** Sync now brings in the last 30 days of Inbox **and** Sent; the **Sent** view lists conversations you wrote in.
-- **Other.** Gmail's Promotions, Social and Updates mail you never replied to is kept out of All mail and the AI tabs, is never auto-classified, and is listed under **Other** (with tab filters).
-- **Search.** Press `/` (or use the box above the list) to search subjects, senders and previews of everything synced. **Search all of Gmail** runs your query (Gmail syntax) against the mailbox and lets you **Import** an older thread. Message bodies are not searched locally.
+- **Other.** Gmail's Promotions, Social and Updates mail you never replied to is kept out of All mail and the AI tabs, is never auto-classified, and is listed under **Other** (with tab filters). Other lists inbox threads only; archived Promotions/Social/Updates mail is still found through search.
+- **Search.** Press `/` (or use the box above the list) to search subjects, senders and previews of everything synced. **Search all of Gmail** runs your query (Gmail syntax) against the mailbox and lets you **Import** an older thread; it is limited to 30 requests per minute per user, shared by searches and imports. Message bodies are not searched locally.
 
 No new Google scope is needed: `gmail.compose` already allows sending drafts.
