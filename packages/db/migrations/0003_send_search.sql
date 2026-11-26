@@ -1,3 +1,8 @@
+-- Postgres 55P04: Drizzle applies all pending migrations in one transaction, and a new enum value
+-- cannot be used in the transaction that added it. On a fresh database, a LATER migration that uses
+-- 'scheduled', 'sending', 'sent' or 'send_failed' in a default, in data or in a partial-index
+-- predicate would fail together with this one. Do not use them that way in future migrations, or
+-- apply such a migration in a separate migrate run.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;--> statement-breakpoint
 ALTER TYPE "public"."draft_status" ADD VALUE 'scheduled';--> statement-breakpoint
 ALTER TYPE "public"."draft_status" ADD VALUE 'sending';--> statement-breakpoint
