@@ -21,7 +21,7 @@ export const SYNC_LEASE_MS = 10 * 60 * 1000;
 export const SYNC_DEADLINE_MS = 8 * 60 * 1000;
 /** The access token must outlive the whole run (deadline plus the final persist). */
 export const SYNC_TOKEN_MIN_VALIDITY_MS = 15 * 60 * 1000;
-export const BACKFILL_QUERY = "in:inbox newer_than:30d";
+export const BACKFILL_QUERY = "(in:inbox OR in:sent) newer_than:30d";
 export const MAX_BACKFILL_THREADS = 300;
 /** Threads fetched and committed per transaction, so progress survives a failed run. */
 export const PERSIST_BATCH_SIZE = 50;
