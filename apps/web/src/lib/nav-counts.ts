@@ -9,7 +9,9 @@ export async function loadNavCounts(): Promise<ThreadViewCounts | null> {
     const session = await getSession();
     if (!session) return null;
     return await countThreadViews(getDb(), session.user.id);
-  } catch {
+  } catch (error) {
+    // Fixed message plus the error class only: DB error messages can echo query parameters.
+    console.error("nav counts failed", error instanceof Error ? error.name : "unknown");
     return null;
   }
 }
