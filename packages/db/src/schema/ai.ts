@@ -98,12 +98,20 @@ export const replyDrafts = pgTable(
     error: text("error"),
     providerDraftId: text("provider_draft_id"),
     savedAt: timestamp("saved_at", { withTimezone: true }),
+    /** When a confirmed send leaves its undo window (status scheduled). */
+    sendAt: timestamp("send_at", { withTimezone: true }),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    /** Gmail message id returned by the send call. */
+    providerMessageId: text("provider_message_id"),
     aiProvider: aiProviderEnum("ai_provider").notNull(),
     model: text("model").notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("reply_drafts_thread_created_idx").on(t.threadId, t.createdAt)],
+  (t) => [
+    index("reply_drafts_thread_created_idx").on(t.threadId, t.createdAt),
+    index("reply_drafts_status_send_at_idx").on(t.status, t.sendAt),
+  ],
 );
 
 export const aiCredentials = pgTable(

@@ -330,7 +330,15 @@ export async function discardDraft(
   const rows = await db
     .update(replyDrafts)
     .set({ status: "discarded", updatedAt: now })
-    .where(and(eq(replyDrafts.id, draftId), eq(replyDrafts.userId, userId), noSaveInFlight(now)))
+    .where(
+      and(
+        eq(replyDrafts.id, draftId),
+        eq(replyDrafts.userId, userId),
+        noSaveInFlight(now),
+        // A confirmed send is in flight or done: the draft is locked (spec M6 §2.1).
+        notInArray(replyDrafts.status, ["scheduled", "sending", "sent"]),
+      ),
+    )
     .returning({ id: replyDrafts.id });
   return rows.length > 0;
 }

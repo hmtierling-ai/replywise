@@ -4,6 +4,7 @@ export * from "./queries/audit";
 export * from "./queries/generation";
 export * from "./queries/mailboxes";
 export * from "./queries/maintenance";
+export * from "./queries/send";
 export * from "./queries/sync";
 export * from "./queries/threads";
 export * from "./schema/index";

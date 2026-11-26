@@ -8,7 +8,11 @@ export type AuditAction =
   | "mailbox.reauth_required"
   | "ai_key.updated"
   | "ai_key.deleted"
-  | "draft.saved";
+  | "draft.saved"
+  | "draft.send_scheduled"
+  | "draft.send_undone"
+  | "draft.sent"
+  | "draft.send_failed";
 
 export interface AuditEntry {
   userId: string;
