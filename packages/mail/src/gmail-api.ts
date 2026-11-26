@@ -1,3 +1,4 @@
+import type { EmailAddress } from "@replywise/core";
 import { getJson, ProviderHttpError } from "./http";
 import {
   type GmailMessageResource,
@@ -6,7 +7,7 @@ import {
 } from "./mime/gmail-message";
 import type { FetchLike } from "./types";
 
-const BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
+const GMAIL_ORIGIN = "https://gmail.googleapis.com";
 const HISTORY_TYPES = ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"] as const;
 
 /** Gmail no longer has history for the stored startHistoryId (HTTP 404): re-backfill. */
@@ -33,6 +34,7 @@ export interface GmailApi {
     pageToken?: string;
   }): Promise<{ ids: string[]; nextPageToken: string | null }>;
   getThread(threadId: string): Promise<ParsedThread | null>;
+  getThreadMetadata(threadId: string): Promise<GmailThreadMetadata | null>;
   listHistory(input: { startHistoryId: string; pageToken?: string }): Promise<HistoryPage>;
 }
 
@@ -44,7 +46,20 @@ function refs(value: unknown): Ref[] {
   return Array.isArray(value) ? (value as Ref[]) : [];
 }
 
+/** Search-result view of a thread: no bodies. */
+export interface GmailThreadMetadata {
+  providerThreadId: string;
+  /** Subject of the first message. */
+  subject: string;
+  /** Sender, date and snippet of the newest message. */
+  from: EmailAddress;
+  date: Date;
+  snippet: string;
+}
+
 export interface GmailApiOptions {
+  /** Origin override (no path), e.g. a local fake for e2e. Defaults to Google. */
+  baseUrl?: string;
   fetch?: FetchLike;
   /** Quota budget spent per second, in GMAIL_COST units (default 90 ≈ 90% of 6000/min). */
   unitsPerSecond?: number;
@@ -60,7 +75,13 @@ export interface GmailApiOptions {
  * (totalQueryCostPerMinutePerUser = 6000): threads.get?format=full exhausted the budget after
  * ~51 calls, i.e. ~115 units each — far above the documented 10. Values are conservative.
  */
-export const GMAIL_COST = { profile: 10, listThreads: 100, getThread: 120, listHistory: 20 };
+export const GMAIL_COST = {
+  profile: 10,
+  listThreads: 100,
+  getThread: 120,
+  getThreadMetadata: 20,
+  listHistory: 20,
+};
 
 const MAX_BACKOFF_MS = 60_000;
 /** Rate-limit backoff per attempt; sums to 75 s so a full retry run outlasts the 60 s quota window. */
@@ -75,6 +96,7 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
   const maxRetries = options.maxRetries ?? 4;
   const random = options.random ?? Math.random;
   let nextFree = 0;
+  const base = `${(options.baseUrl ?? GMAIL_ORIGIN).replace(/\/+$/, "")}/gmail/v1/users/me`;
 
   function backoffMs(error: ProviderHttpError, attempt: number): number {
     if (error.retryAfterMs !== undefined) {
@@ -111,7 +133,7 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
 
   return {
     async getProfile() {
-      const body = await get(new URL(`${BASE}/profile`), GMAIL_COST.profile);
+      const body = await get(new URL(`${base}/profile`), GMAIL_COST.profile);
       if (typeof body.emailAddress !== "string" || body.historyId === undefined) {
         throw new ProviderHttpError(200, "/gmail/v1/users/me/profile");
       }
@@ -119,7 +141,7 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
     },
 
     async listThreadIds({ query, maxResults, pageToken }) {
-      const url = new URL(`${BASE}/threads`);
+      const url = new URL(`${base}/threads`);
       url.searchParams.set("q", query);
       url.searchParams.set("maxResults", String(maxResults));
       if (pageToken) url.searchParams.set("pageToken", pageToken);
@@ -132,7 +154,7 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
     },
 
     async getThread(threadId) {
-      const url = new URL(`${BASE}/threads/${encodeURIComponent(threadId)}`);
+      const url = new URL(`${base}/threads/${encodeURIComponent(threadId)}`);
       url.searchParams.set("format", "full");
       let body: Record<string, unknown>;
       try {
@@ -152,8 +174,36 @@ export function createGmailApi(accessToken: string, options: GmailApiOptions = {
       };
     },
 
+    async getThreadMetadata(threadId) {
+      const url = new URL(`${base}/threads/${encodeURIComponent(threadId)}`);
+      url.searchParams.set("format", "metadata");
+      for (const header of ["Subject", "From", "Date"]) {
+        url.searchParams.append("metadataHeaders", header);
+      }
+      let body: Record<string, unknown>;
+      try {
+        body = await get(url, GMAIL_COST.getThreadMetadata);
+      } catch (error) {
+        if (error instanceof ProviderHttpError && error.status === 404) return null;
+        throw error;
+      }
+      const parsed = (Array.isArray(body.messages) ? (body.messages as GmailMessageResource[]) : [])
+        .map(parseGmailMessage)
+        .sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime());
+      const first = parsed[0];
+      const last = parsed.at(-1);
+      if (!first || !last) return null;
+      return {
+        providerThreadId: threadId,
+        subject: first.subject,
+        from: last.from,
+        date: last.sentAt,
+        snippet: last.snippet,
+      };
+    },
+
     async listHistory({ startHistoryId, pageToken }) {
-      const url = new URL(`${BASE}/history`);
+      const url = new URL(`${base}/history`);
       url.searchParams.set("startHistoryId", startHistoryId);
       for (const type of HISTORY_TYPES) url.searchParams.append("historyTypes", type);
       url.searchParams.set("maxResults", "500");

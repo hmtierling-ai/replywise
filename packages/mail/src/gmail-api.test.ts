@@ -264,4 +264,66 @@ describe("createGmailApi", () => {
       expect(calls).toHaveLength(3);
     });
   });
+
+  it("reads thread metadata: first subject, newest sender, date and snippet", async () => {
+    const meta = (
+      id: string,
+      internalDate: string,
+      from: string,
+      subject: string,
+      snippet: string,
+    ) => ({
+      id,
+      threadId: "t1",
+      internalDate,
+      snippet,
+      payload: {
+        mimeType: "text/plain",
+        headers: [
+          { name: "From", value: from },
+          { name: "Subject", value: subject },
+        ],
+      },
+    });
+    const { fetchImpl, calls } = fakeFetch([
+      {
+        body: {
+          id: "t1",
+          messages: [
+            meta("m2", "2000", "Bob <bob@x.com>", "Re: Invoice", "newest"),
+            meta("m1", "1000", "ada@x.com", "Invoice", "first"),
+          ],
+        },
+      },
+      { status: 404, body: { error: { code: 404 } } },
+    ]);
+    const api = createGmailApi("tok", { fetch: fetchImpl, sleep: noSleep });
+    expect(await api.getThreadMetadata("t1")).toEqual({
+      providerThreadId: "t1",
+      subject: "Invoice",
+      from: { name: "Bob", address: "bob@x.com" },
+      date: new Date(2000),
+      snippet: "newest",
+    });
+    expect(calls[0]?.url.pathname).toBe("/gmail/v1/users/me/threads/t1");
+    expect(calls[0]?.url.searchParams.get("format")).toBe("metadata");
+    expect(calls[0]?.url.searchParams.getAll("metadataHeaders")).toEqual([
+      "Subject",
+      "From",
+      "Date",
+    ]);
+    expect(await api.getThreadMetadata("gone")).toBeNull();
+  });
+
+  it("talks to a configured origin instead of Google", async () => {
+    const { fetchImpl, calls } = fakeFetch([{ body: { threads: [] } }]);
+    const api = createGmailApi("tok", {
+      fetch: fetchImpl,
+      sleep: noSleep,
+      baseUrl: "http://127.0.0.1:4010/",
+    });
+    await api.listThreadIds({ query: "x", maxResults: 1 });
+    expect(calls[0]?.url.origin).toBe("http://127.0.0.1:4010");
+    expect(calls[0]?.url.pathname).toBe("/gmail/v1/users/me/threads");
+  });
 });

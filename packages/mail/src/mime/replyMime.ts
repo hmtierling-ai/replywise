@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { EmailAddress } from "@replywise/core";
+import { type EmailAddress, replySubject } from "@replywise/core";
 
 export interface ReplyMimeInput {
   from: EmailAddress;
@@ -85,11 +85,6 @@ function address(a: EmailAddress, addr: string): string {
     return `"${name.replace(/[\\"]/g, "\\$&")}" <${addr}>`;
   }
   return `${name} <${addr}>`;
-}
-
-function replySubject(subject: string): string {
-  const s = clean(subject);
-  return /^re:/i.test(s) ? s : `Re: ${s}`;
 }
 
 function messageIds(values: string[]): string[] {
