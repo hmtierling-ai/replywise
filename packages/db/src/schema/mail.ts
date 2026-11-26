@@ -72,8 +72,14 @@ export const threads = pgTable(
     messageCount: integer("message_count").notNull().default(0),
     isUnread: boolean("is_unread").notNull().default(false),
     providerLabels: text("provider_labels").array().notNull().default(sql`'{}'::text[]`),
-    /** Lower-cased participants JSON, for trigram search (spec M6 §5.1). jsonb→text is immutable. */
-    participantsText: text("participants_text").generatedAlwaysAs(sql`lower(participants::text)`),
+    /**
+     * Lower-cased participant names and addresses, space-separated, for trigram search (spec M6
+     * §5.1). Values only: no JSON keys, quotes or nulls. The IMMUTABLE SQL function
+     * `participants_search_text` is created by migration 0004.
+     */
+    participantsText: text("participants_text").generatedAlwaysAs(
+      sql`participants_search_text(participants)`,
+    ),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

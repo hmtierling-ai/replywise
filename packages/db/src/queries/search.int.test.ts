@@ -83,4 +83,28 @@ describe("searchThreads", () => {
     ]);
     expect(await searchThreads(db, alice.id, " c ")).toEqual([]);
   });
+
+  it("matches participant names and addresses, never the JSON keys, null or punctuation", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    const thread = await insertThread(db, box.id, {
+      subject: "Quarterly",
+      snippet: "Figs attached",
+      participants: [
+        { name: "Grace Hopper", address: "grace@navy.example" },
+        { name: null, address: "bob@example.com" },
+      ],
+      providerLabels: ["INBOX"],
+    });
+    await insertMessage(db, thread.id, box.id);
+    for (const q of ["name", "address", "null", "re", '":"', '","']) {
+      expect(await searchThreads(db, alice.id, q), q).toEqual([]);
+    }
+    for (const q of ["GRACE", "hopper", "Grace Hopper", "navy.example", "BOB@EXAMPLE"]) {
+      expect(
+        (await searchThreads(db, alice.id, q)).map((r) => r.subject),
+        q,
+      ).toEqual(["Quarterly"]);
+    }
+  });
 });
