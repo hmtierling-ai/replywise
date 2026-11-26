@@ -2,6 +2,7 @@ import { CATEGORY_META, categoryFromSlug, INBOX_CATEGORIES } from "@replywise/co
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { AiStatusBanner } from "@/components/inbox/ai-status-banner";
+import { SearchBox } from "@/components/inbox/search-box";
 import { ThreadList, ThreadListSkeleton } from "@/components/inbox/thread-list";
 
 export function generateStaticParams() {
@@ -19,11 +20,12 @@ export default async function CategoryPage({ params }: PageProps<"/inbox/[catego
   return (
     <div className="mx-auto w-full max-w-4xl">
       <h1 className="sr-only">{CATEGORY_META[category].label}</h1>
+      <SearchBox />
       <Suspense fallback={null}>
         <AiStatusBanner />
       </Suspense>
       <Suspense fallback={<ThreadListSkeleton />}>
-        <ThreadList category={category} />
+        <ThreadList view={{ kind: "inbox", category }} />
       </Suspense>
     </div>
   );
