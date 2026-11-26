@@ -75,7 +75,15 @@ export async function scheduleSendAction(input: {
     return fail("send_rate_limited");
   }
   const sendAt = new Date(now.getTime() + SEND_DELAY_MS);
-  if (!(await scheduleSend(db, user.id, draftId, sendAt, now))) return fail("not_sendable");
+  // Only the ciphertext checked above may be scheduled: a save from another tab in between
+  // changes it, and the conditional update then does not apply.
+  if (!(await scheduleSend(db, user.id, draftId, draft.bodyCiphertext, sendAt, now))) {
+    const current = await getDraftForUser(db, user.id, draftId);
+    if (current && !current.bodyCiphertext.equals(draft.bodyCiphertext)) {
+      return fail("draft_changed");
+    }
+    return fail("not_sendable");
+  }
   try {
     await getQueue().enqueue(
       "draft.send",
@@ -84,7 +92,12 @@ export async function scheduleSendAction(input: {
     );
   } catch {
     // Without a job only the stuck-send scan would start it; give the draft back instead.
-    await undoSend(db, user.id, draftId, now);
+    try {
+      await undoSend(db, user.id, draftId, now);
+    } catch {
+      // The row stays scheduled and recovery may still send it: the user must reload to undo.
+      return fail("send_still_scheduled");
+    }
     return fail("internal");
   }
   await audit(user.id, "draft.send_scheduled", {

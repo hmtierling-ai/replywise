@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GENERATION_ERRORS, generationError, sendFailure } from "./draft-messages";
+import { GENERATION_ERRORS, generationError, sendActionError, sendFailure } from "./draft-messages";
 
 const WORKER_CODES = [
   "no_ai_key",
@@ -35,5 +35,14 @@ describe("sendFailure", () => {
       "Gmail needs to be reconnected (Settings → Mailboxes). Nothing was sent.",
     );
     expect(sendFailure(null)).toBe("Something went wrong. Try again. Nothing was sent.");
+  });
+});
+
+describe("sendActionError", () => {
+  it("tells the user to reload to undo when the send may still go out", () => {
+    const copy = sendActionError("send_still_scheduled");
+    expect(copy).toMatch(/may still be sent/);
+    expect(copy).toMatch(/Reload the page to undo/);
+    expect(copy).not.toMatch(/Nothing was sent/);
   });
 });

@@ -95,13 +95,14 @@ async function seed(options: { providerDraftId?: string } = {}) {
     })
     .returning();
   if (!draft) throw new Error("draft insert failed");
+  const ciphertext = await encryptor.encrypt(BODY, aad.replyDraft(draft.id));
   await db
     .update(replyDrafts)
-    .set({ bodyCiphertext: await encryptor.encrypt(BODY, aad.replyDraft(draft.id)) })
+    .set({ bodyCiphertext: ciphertext })
     .where(eq(replyDrafts.id, draft.id));
   // Already past the undo window, so the claim succeeds immediately.
   const sendAt = new Date(Date.now() - 1_000);
-  expect(await scheduleSend(db, user.id, draft.id, sendAt, new Date())).toBe(true);
+  expect(await scheduleSend(db, user.id, draft.id, ciphertext, sendAt, new Date())).toBe(true);
   return { user, account, thread, m1, draftId: draft.id, sendAt };
 }
 

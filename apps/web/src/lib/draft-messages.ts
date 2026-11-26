@@ -28,6 +28,7 @@ export type SendActionErrorCode =
   | "draft_changed"
   | "send_rate_limited"
   | "too_late"
+  | "send_still_scheduled"
   | "internal";
 
 export const SEND_ACTION_ERRORS: Record<SendActionErrorCode, string> = {
@@ -35,6 +36,8 @@ export const SEND_ACTION_ERRORS: Record<SendActionErrorCode, string> = {
   draft_changed: "The draft changed after you opened this dialog. Review it and confirm again.",
   send_rate_limited: "You've sent 20 replies in the last hour. Try again later.",
   too_late: "Too late to undo: the reply is already being sent.",
+  send_still_scheduled:
+    "Something went wrong and the reply may still be sent. Reload the page to undo it.",
   internal: "Something went wrong. Nothing was sent. Try again.",
 };
 

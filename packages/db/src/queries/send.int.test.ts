@@ -43,6 +43,8 @@ beforeEach(async () => resetTestDb(db));
 const NOW = new Date("2026-11-25T12:00:00Z");
 const MIN = 60_000;
 const at = (ms: number) => new Date(NOW.getTime() + ms);
+/** The ciphertext every test draft is inserted with (the one a confirm would have read). */
+const BODY = Buffer.from("b");
 
 async function seed(provider: "gmail" | "outlook" = "gmail") {
   const alice = await insertUser(db);
@@ -80,10 +82,10 @@ describe("scheduleSend and undoSend", () => {
     const { alice, bob, thread } = await seed();
     const id = await draft(alice.id, thread.id);
     const sendAt = at(SEND_DELAY_MS);
-    expect(await scheduleSend(db, bob.id, id, sendAt, NOW)).toBe(false);
-    expect(await scheduleSend(db, alice.id, id, sendAt, NOW)).toBe(true);
+    expect(await scheduleSend(db, bob.id, id, BODY, sendAt, NOW)).toBe(false);
+    expect(await scheduleSend(db, alice.id, id, BODY, sendAt, NOW)).toBe(true);
     expect(await getDraftForUser(db, alice.id, id)).toMatchObject({ status: "scheduled", sendAt });
-    expect(await scheduleSend(db, alice.id, id, sendAt, NOW)).toBe(false); // already scheduled
+    expect(await scheduleSend(db, alice.id, id, BODY, sendAt, NOW)).toBe(false); // already scheduled
     expect(await hasActiveSend(db, alice.id, thread.id)).toBe(true);
     expect(await hasActiveSend(db, bob.id, thread.id)).toBe(false);
     expect(await discardDraft(db, alice.id, id, NOW)).toBe(false);
@@ -98,12 +100,14 @@ describe("scheduleSend and undoSend", () => {
     const { alice, thread } = await seed();
     for (const status of ["pending", "failed", "discarded", "sent", "sending"] as const) {
       const id = await draft(alice.id, thread.id, { status });
-      expect(await scheduleSend(db, alice.id, id, at(SEND_DELAY_MS), NOW), status).toBe(false);
+      expect(await scheduleSend(db, alice.id, id, BODY, at(SEND_DELAY_MS), NOW), status).toBe(
+        false,
+      );
     }
     const saving = await draft(alice.id, thread.id, { saveRequestedAt: at(-MIN) });
-    expect(await scheduleSend(db, alice.id, saving, at(SEND_DELAY_MS), NOW)).toBe(false);
+    expect(await scheduleSend(db, alice.id, saving, BODY, at(SEND_DELAY_MS), NOW)).toBe(false);
     const staleSave = await draft(alice.id, thread.id, { saveRequestedAt: at(-11 * MIN) });
-    expect(await scheduleSend(db, alice.id, staleSave, at(SEND_DELAY_MS), NOW)).toBe(true);
+    expect(await scheduleSend(db, alice.id, staleSave, BODY, at(SEND_DELAY_MS), NOW)).toBe(true);
   });
 
   it("allows a new send after a failure that proves nothing was sent, never after send_unconfirmed", async () => {
@@ -120,9 +124,9 @@ describe("scheduleSend and undoSend", () => {
       status: "send_failed",
       error: "send_unconfirmed",
     });
-    expect(await scheduleSend(db, alice.id, rejected, at(SEND_DELAY_MS), NOW)).toBe(true);
-    expect(await scheduleSend(db, alice.id, saveError, at(SEND_DELAY_MS), NOW)).toBe(true);
-    expect(await scheduleSend(db, alice.id, unconfirmed, at(SEND_DELAY_MS), NOW)).toBe(false);
+    expect(await scheduleSend(db, alice.id, rejected, BODY, at(SEND_DELAY_MS), NOW)).toBe(true);
+    expect(await scheduleSend(db, alice.id, saveError, BODY, at(SEND_DELAY_MS), NOW)).toBe(true);
+    expect(await scheduleSend(db, alice.id, unconfirmed, BODY, at(SEND_DELAY_MS), NOW)).toBe(false);
     expect(await reopenFailedSend(db, alice.id, unconfirmed, NOW)).toBe(true);
     expect(await getDraftForUser(db, alice.id, unconfirmed)).toMatchObject({
       status: "edited",
@@ -130,10 +134,19 @@ describe("scheduleSend and undoSend", () => {
     });
   });
 
+  it("refuses a body re-saved since the confirm read it, leaving the row unchanged", async () => {
+    const { alice, thread } = await seed();
+    const id = await draft(alice.id, thread.id, { status: "edited" });
+    const before = await getDraftForUser(db, alice.id, id);
+    const stale = Buffer.from("an older ciphertext");
+    expect(await scheduleSend(db, alice.id, id, stale, at(SEND_DELAY_MS), NOW)).toBe(false);
+    expect(await getDraftForUser(db, alice.id, id)).toEqual(before);
+  });
+
   it("refuses non-Gmail mailboxes", async () => {
     const { alice, thread } = await seed("outlook");
     const id = await draft(alice.id, thread.id);
-    expect(await scheduleSend(db, alice.id, id, at(SEND_DELAY_MS), NOW)).toBe(false);
+    expect(await scheduleSend(db, alice.id, id, BODY, at(SEND_DELAY_MS), NOW)).toBe(false);
   });
 });
 
@@ -141,7 +154,7 @@ describe("worker transitions", () => {
   it("claims only when due, once, then records the Gmail result", async () => {
     const { alice, thread } = await seed();
     const id = await draft(alice.id, thread.id);
-    await scheduleSend(db, alice.id, id, at(SEND_DELAY_MS), NOW);
+    await scheduleSend(db, alice.id, id, BODY, at(SEND_DELAY_MS), NOW);
     expect(await claimSend(db, id, NOW)).toBe(false); // still inside the undo window
     expect(await claimSend(db, id, at(SEND_DELAY_MS))).toBe(true);
     expect(await claimSend(db, id, at(SEND_DELAY_MS))).toBe(false);

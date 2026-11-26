@@ -72,7 +72,14 @@ describe("scheduleSendAction", () => {
       scheduleSendAction({ draftId: DRAFT_ID, expectedBody: "Hi Ada,\r\n\r\nYes." }),
     ).resolves.toEqual({ ok: true });
     const sendAt = new Date(NOW.getTime() + 10_000);
-    expect(dbMocks.scheduleSend).toHaveBeenCalledWith({}, "user-1", DRAFT_ID, sendAt, NOW);
+    expect(dbMocks.scheduleSend).toHaveBeenCalledWith(
+      {},
+      "user-1",
+      DRAFT_ID,
+      Buffer.from("ct"),
+      sendAt,
+      NOW,
+    );
     expect(enqueue).toHaveBeenCalledWith(
       "draft.send",
       { draftId: DRAFT_ID },
@@ -134,6 +141,37 @@ describe("scheduleSendAction", () => {
       error: "not_sendable",
     });
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("reports draft_changed when the body was re-saved between the check and the schedule", async () => {
+    dbMocks.scheduleSend.mockResolvedValue(false);
+    dbMocks.getDraftForUser
+      .mockResolvedValueOnce({
+        id: DRAFT_ID,
+        threadId: THREAD_ID,
+        status: "edited",
+        bodyCiphertext: Buffer.from("ct"),
+      })
+      .mockResolvedValueOnce({
+        id: DRAFT_ID,
+        threadId: THREAD_ID,
+        status: "edited",
+        bodyCiphertext: Buffer.from("ct-from-another-tab"),
+      });
+    await expect(scheduleSendAction({ draftId: DRAFT_ID, expectedBody: STORED })).resolves.toEqual({
+      ok: false,
+      error: "draft_changed",
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("warns that the send may still go out when neither the enqueue nor the undo works", async () => {
+    enqueue.mockRejectedValue(new Error("redis down"));
+    dbMocks.undoSend.mockRejectedValue(new Error("db down"));
+    await expect(scheduleSendAction({ draftId: DRAFT_ID, expectedBody: STORED })).resolves.toEqual({
+      ok: false,
+      error: "send_still_scheduled",
+    });
   });
 
   it("hands control back when the job cannot be enqueued", async () => {

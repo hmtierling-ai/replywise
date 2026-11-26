@@ -50,11 +50,14 @@ export interface FailedSendRow {
 /**
  * generated|edited|saved (or send_failed with a resendable code) → scheduled. Refused while a
  * non-stale save to Gmail is in flight and for non-Gmail mailboxes. Enqueue only on true.
+ * `expectedCiphertext` is the body the caller checked against the confirmation: encryption is
+ * randomised, so any re-save since then changes the bytes and the update does not apply.
  */
 export async function scheduleSend(
   db: DbExecutor,
   userId: string,
   draftId: string,
+  expectedCiphertext: Buffer,
   sendAt: Date,
   now: Date,
 ): Promise<boolean> {
@@ -65,6 +68,7 @@ export async function scheduleSend(
       and(
         eq(replyDrafts.id, draftId),
         eq(replyDrafts.userId, userId),
+        eq(replyDrafts.bodyCiphertext, expectedCiphertext),
         or(
           inArray(replyDrafts.status, [...SENDABLE]),
           and(
