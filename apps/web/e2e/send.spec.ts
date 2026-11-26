@@ -44,8 +44,9 @@ test("Send asks for confirmation, and Undo returns the draft to editing", async 
   const body = composer.getByRole("textbox", { name: "Reply draft" });
   await expect(body).toHaveValue("Hi Ada,\n\nSigned.");
   await body.fill("Hi Ada,\n\nSigned and attached.");
+  const saved = page.waitForResponse((r) => r.request().method() === "POST" && r.ok());
   await composer.getByRole("button", { name: "Save edits" }).click();
-  await page.waitForLoadState("networkidle");
+  await saved;
   await page.reload();
   await expect(
     page.getByRole("region", { name: "Reply" }).getByRole("textbox", { name: "Reply draft" }),

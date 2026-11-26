@@ -6,24 +6,39 @@ import type { LimiterStore } from "./search-limit";
 type Redis = ReturnType<typeof createProducerConnection>;
 const globalForLimiter = globalThis as unknown as { replywiseLimiterRedis?: Redis };
 
+export const READY_TIMEOUT_MS = 5_000;
+
+interface ReadyTarget {
+  status: string;
+  once(event: "ready", listener: () => void): unknown;
+  once(event: "error", listener: (error: Error) => void): unknown;
+  off(event: "ready", listener: () => void): unknown;
+  off(event: "error", listener: (error: Error) => void): unknown;
+}
+
 /**
  * The producer connection has no offline queue, so a command sent while the first connection is
- * still being established would fail. Wait for it (bounded by the connect timeout).
+ * still being established would fail. Wait for it, bounded by a timeout; never hangs.
  */
-async function ready(redis: Redis): Promise<void> {
+export async function ready(redis: ReadyTarget): Promise<void> {
   if (redis.status === "ready") return;
-  await new Promise<void>((resolve, reject) => {
-    const onReady = () => {
-      redis.off("error", onError);
-      resolve();
-    };
-    const onError = (error: Error) => {
-      redis.off("ready", onReady);
-      reject(error);
-    };
-    redis.once("ready", onReady);
-    redis.once("error", onError);
-  });
+  if (redis.status === "end") throw new Error("redis connection closed");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onReady: (() => void) | undefined;
+  let onError: ((error: Error) => void) | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      onReady = () => resolve();
+      onError = (error) => reject(error);
+      redis.once("ready", onReady);
+      redis.once("error", onError);
+      timer = setTimeout(() => reject(new Error("redis not ready in time")), READY_TIMEOUT_MS);
+    });
+  } finally {
+    clearTimeout(timer);
+    if (onReady) redis.off("ready", onReady);
+    if (onError) redis.off("error", onError);
+  }
 }
 
 /** Redis-backed limiter store: one fail-fast connection per process (survives dev reloads). */

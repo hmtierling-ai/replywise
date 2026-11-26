@@ -39,6 +39,10 @@ test("Gmail tab mail moves to Other unless the user replied", async ({ page }) =
     name: "Other",
   });
   await expect(other).toContainText("1");
+  // Sent carries no badge by design; All mail counts the two inbox threads.
+  await expect(
+    page.getByRole("navigation", { name: "Mailbox views" }).getByRole("link", { name: "All mail" }),
+  ).toContainText("2");
   await other.click();
   await expect(page).toHaveURL(/\/other$/);
   await expect(main.getByText("Weekly sale")).toBeVisible();
@@ -60,7 +64,12 @@ test("Sent lists the threads the user wrote in", async ({ page }) => {
 test("local search finds threads everywhere and says where they live", async ({ page }) => {
   await seedViews(page);
   await page.goto("/inbox");
-  await page.keyboard.press("/");
+  const box = page.getByRole("searchbox", { name: "Search mail" });
+  // The shortcut only works once the page has hydrated, so retry until the box has focus.
+  await expect(async () => {
+    await page.keyboard.press("/");
+    await expect(box).toBeFocused({ timeout: 500 });
+  }).toPass();
   await page.keyboard.type("sale");
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/search\?q=sale$/);
