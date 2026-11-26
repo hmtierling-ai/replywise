@@ -20,6 +20,7 @@ const { enqueue, encryptor, dbMocks } = vi.hoisted(() => {
     getAiCredentialSummary: vi.fn(),
     getDraftForUser: vi.fn(),
     getWritingPreferences: vi.fn(),
+    hasActiveSend: vi.fn(),
     hasFreshPendingDraft: vi.fn(),
     latestInboundMessageId: vi.fn(),
     requestDraftSave: vi.fn(),
@@ -67,6 +68,7 @@ beforeEach(() => {
   dbMocks.threadBelongsToUser.mockResolvedValue(true);
   dbMocks.getAiCredentialSummary.mockResolvedValue({ status: "valid" });
   dbMocks.requestSummary.mockResolvedValue(true);
+  dbMocks.hasActiveSend.mockResolvedValue(false);
   dbMocks.hasFreshPendingDraft.mockResolvedValue(false);
   dbMocks.getWritingPreferences.mockResolvedValue({
     defaultTone: "professional",
@@ -99,6 +101,13 @@ describe("generateDraftAction", () => {
     enqueue.mockRejectedValue(new Error("redis down"));
     await expect(generateDraftAction(form({ threadId: THREAD_ID }))).resolves.toBeUndefined();
     expect(dbMocks.failDraft).toHaveBeenCalledWith({}, DRAFT_ID, "internal");
+  });
+
+  it("does not regenerate while a send of this thread is scheduled or sending", async () => {
+    dbMocks.hasActiveSend.mockResolvedValue(true);
+    await generateDraftAction(form({ threadId: THREAD_ID }));
+    expect(dbMocks.createPendingDraft).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("enqueues nothing and creates no draft while a fresh pending draft exists", async () => {

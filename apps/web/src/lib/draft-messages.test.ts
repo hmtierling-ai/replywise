@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GENERATION_ERRORS, generationError } from "./draft-messages";
+import { GENERATION_ERRORS, generationError, sendFailure } from "./draft-messages";
 
 const WORKER_CODES = [
   "no_ai_key",
@@ -24,5 +24,16 @@ describe("generationError", () => {
   it("maps unknown codes to the internal copy and null to null", () => {
     expect(generationError("something_new")).toBe(GENERATION_ERRORS.internal);
     expect(generationError(null)).toBeNull();
+  });
+});
+
+describe("sendFailure", () => {
+  it("explains unconfirmed and rejected sends, and says nothing was sent for save errors", () => {
+    expect(sendFailure("send_unconfirmed")).toMatch(/may or may not have gone out/);
+    expect(sendFailure("send_rejected")).toMatch(/Nothing was sent/);
+    expect(sendFailure("gmail_reauth")).toBe(
+      "Gmail needs to be reconnected (Settings → Mailboxes). Nothing was sent.",
+    );
+    expect(sendFailure(null)).toBe("Something went wrong. Try again. Nothing was sent.");
   });
 });

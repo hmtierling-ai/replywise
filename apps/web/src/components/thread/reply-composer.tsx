@@ -6,15 +6,27 @@ import {
   saveDraftEditAction,
   saveDraftToGmailAction,
 } from "@/app/(app)/thread/[id]/actions";
+import { editFailedSendAction } from "@/app/(app)/thread/[id]/send-actions";
 import { LocalTime } from "@/components/local-time";
+import { SendControls } from "@/components/thread/send-controls";
+import { SendCountdown } from "@/components/thread/send-countdown";
 import { Button } from "@/components/ui/button";
-import { generationError } from "@/lib/draft-messages";
+import { generationError, sendFailure } from "@/lib/draft-messages";
 import { formatThreadTime } from "@/lib/inbox-format";
 
 /** Draft data safe for rendering: the body is already decrypted, never the ciphertext. */
 export interface DraftView {
   id: string;
-  status: "pending" | "generated" | "edited" | "saved" | "failed";
+  status:
+    | "pending"
+    | "generated"
+    | "edited"
+    | "saved"
+    | "failed"
+    | "scheduled"
+    | "sending"
+    | "sent"
+    | "send_failed";
   /** Decrypted body; null for pending and failed drafts. */
   body: string | null;
   /** Decryption failed: show a discard-only message instead of the editor. */
@@ -26,6 +38,13 @@ export interface DraftView {
   /** A save to Gmail is in flight (requested and not stale). */
   saving: boolean;
   savedAt: Date | null;
+  /** When a scheduled send leaves its undo window. */
+  sendAt: Date | null;
+  sentAt: Date | null;
+  /** Recipient and subject for the confirmation; null when it cannot be sent (not Gmail, or nobody to answer). */
+  sendPreview: { to: string; subject: string } | null;
+  /** send_failed with a code that proves nothing was sent: a new confirm is allowed. */
+  canResend: boolean;
 }
 
 function GenerateForm({
@@ -89,15 +108,103 @@ function DiscardForm({ draftId, threadId }: { draftId: string; threadId: string 
   );
 }
 
+function ReadOnlyBody({ body }: { body: string | null }) {
+  return (
+    <p className="w-full whitespace-pre-wrap rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
+      {body ?? ""}
+    </p>
+  );
+}
+
+/** scheduled / sending / sent: the draft is locked (spec M6 §2.1). */
+function SendStateItem({
+  draft,
+  gmailThreadHref,
+  now,
+}: {
+  draft: DraftView;
+  gmailThreadHref: string | null;
+  now: Date;
+}) {
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <ReadOnlyBody body={draft.body} />
+      {draft.status === "scheduled" && draft.sendAt ? (
+        <SendCountdown draftId={draft.id} sendAt={draft.sendAt.toISOString()} />
+      ) : null}
+      {draft.status === "sending" || (draft.status === "scheduled" && !draft.sendAt) ? (
+        <p role="status" className="text-sm font-medium">
+          Sending…
+        </p>
+      ) : null}
+      {draft.status === "sent" ? (
+        <p className="flex flex-wrap items-center gap-x-3 text-sm">
+          <span role="status" className="font-medium">
+            Sent ✓
+          </span>
+          {draft.sentAt ? (
+            <LocalTime
+              iso={draft.sentAt.toISOString()}
+              serverText={formatThreadTime(draft.sentAt, now)}
+              className="text-xs text-muted-foreground"
+            />
+          ) : null}
+          {gmailThreadHref ? (
+            <a
+              href={gmailThreadHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-4"
+            >
+              Open in Gmail
+            </a>
+          ) : null}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function FailedSendItem({ draft, threadId }: { draft: DraftView; threadId: string }) {
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <ReadOnlyBody body={draft.body} />
+      <p role="alert" className="text-sm text-destructive">
+        {sendFailure(draft.error)}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <form action={editFailedSendAction}>
+          <input type="hidden" name="draftId" value={draft.id} />
+          <input type="hidden" name="threadId" value={threadId} />
+          <Button type="submit" size="sm" variant="outline">
+            Edit
+          </Button>
+        </form>
+        {draft.canResend && draft.sendPreview && draft.body !== null ? (
+          <SendControls
+            draftId={draft.id}
+            savedBody={draft.body}
+            to={draft.sendPreview.to}
+            subject={draft.sendPreview.subject}
+            label="Try again"
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function DraftItem({
   draft,
   threadId,
   mailboxEmail,
+  gmailThreadHref,
   now,
 }: {
   draft: DraftView;
   threadId: string;
   mailboxEmail: string;
+  gmailThreadHref: string | null;
   now: Date;
 }) {
   if (draft.status === "pending" && !draft.stuck) {
@@ -124,6 +231,12 @@ function DraftItem({
         <DiscardForm draftId={draft.id} threadId={threadId} />
       </div>
     );
+  }
+  if (draft.status === "scheduled" || draft.status === "sending" || draft.status === "sent") {
+    return <SendStateItem draft={draft} gmailThreadHref={gmailThreadHref} now={now} />;
+  }
+  if (draft.status === "send_failed") {
+    return <FailedSendItem draft={draft} threadId={threadId} />;
   }
   return (
     <form className="flex flex-col gap-2">
@@ -153,6 +266,15 @@ function DraftItem({
         <Button type="submit" size="sm" disabled={draft.saving} formAction={saveDraftToGmailAction}>
           {draft.providerDraftId ? "Update Gmail draft" : "Save to Gmail"}
         </Button>
+        {draft.sendPreview && draft.body !== null ? (
+          <SendControls
+            draftId={draft.id}
+            savedBody={draft.body}
+            to={draft.sendPreview.to}
+            subject={draft.sendPreview.subject}
+            disabled={draft.saving}
+          />
+        ) : null}
         <Button
           type="submit"
           size="sm"
@@ -169,8 +291,8 @@ function DraftItem({
         </p>
       ) : null}
       <p className="text-xs text-muted-foreground">
-        Your signature is added when saving. Replywise never sends email — open the draft in Gmail
-        to review and send it yourself.
+        Your signature is added when saving or sending. "Send…" asks you to confirm and gives you 10
+        seconds to undo; nothing is ever sent automatically.
       </p>
       <p className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
         {draft.saving ? (
@@ -203,6 +325,7 @@ export function ReplyComposer({
   defaultTone,
   hasValidKey,
   mailboxEmail,
+  gmailThreadHref,
   now,
 }: {
   threadId: string;
@@ -211,17 +334,21 @@ export function ReplyComposer({
   defaultTone: ReplyTone;
   hasValidKey: boolean;
   mailboxEmail: string;
+  gmailThreadHref: string | null;
   now: Date;
 }) {
+  const sendRunning = drafts.some((d) => d.status === "scheduled" || d.status === "sending");
   return (
     <section aria-label="Reply" className="mt-6 rounded-lg border border-border px-4 py-3">
       <h2 className="mb-2 text-sm font-semibold">Reply</h2>
       {hasValidKey ? (
-        <GenerateForm
-          threadId={threadId}
-          defaultTone={defaultTone}
-          regenerate={drafts.length > 0}
-        />
+        sendRunning ? null : (
+          <GenerateForm
+            threadId={threadId}
+            defaultTone={defaultTone}
+            regenerate={drafts.length > 0}
+          />
+        )
       ) : (
         <Link href="/settings/ai" className="text-sm underline underline-offset-4">
           Add your Anthropic key to write replies
@@ -240,6 +367,7 @@ export function ReplyComposer({
                     draft={draft}
                     threadId={threadId}
                     mailboxEmail={mailboxEmail}
+                    gmailThreadHref={gmailThreadHref}
                     now={now}
                   />
                 </div>

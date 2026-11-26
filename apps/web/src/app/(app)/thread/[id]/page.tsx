@@ -1,3 +1,4 @@
+import { pickReplyTarget, replySubject } from "@replywise/core";
 import { aad } from "@replywise/crypto";
 import {
   getAiCredentialSummary,
@@ -6,6 +7,7 @@ import {
   getWritingPreferences,
   listDraftsForThread,
   PENDING_STALE_MS,
+  RESENDABLE_FAILURES,
   SAVE_STALE_MS,
 } from "@replywise/db";
 import { loadThreadForUser } from "@replywise/sync";
@@ -41,6 +43,9 @@ async function ThreadContent({ params }: { params: PageProps<"/thread/[id]">["pa
   await connection();
   const now = new Date();
   const encryptor = getEncryptor();
+  const sendable = view.mailbox.provider === "gmail";
+  const recipient = (address: { name: string | null; address: string }) =>
+    address.name ? `${address.name} <${address.address}>` : address.address;
   const drafts: DraftView[] = await Promise.all(
     draftRows
       .filter((d) => d.status !== "discarded")
@@ -66,6 +71,18 @@ async function ThreadContent({ params }: { params: PageProps<"/thread/[id]">["pa
           providerDraftId: d.providerDraftId,
           saving: d.saveRequestedAt !== null && !isOlderThan(d.saveRequestedAt, now, SAVE_STALE_MS),
           savedAt: d.savedAt,
+          sendAt: d.sendAt,
+          sentAt: d.sentAt,
+          sendPreview: (() => {
+            // Same target rule as the worker (pickReplyTarget), computed server-side.
+            const target = sendable ? pickReplyTarget(view.messages, d.forMessageId) : null;
+            return target
+              ? { to: recipient(target.from), subject: replySubject(view.subject) }
+              : null;
+          })(),
+          canResend:
+            status === "send_failed" &&
+            (RESENDABLE_FAILURES as readonly string[]).includes(d.error ?? ""),
         };
       }),
   );
@@ -73,7 +90,13 @@ async function ThreadContent({ params }: { params: PageProps<"/thread/[id]">["pa
     summary?.status === "pending" && isOlderThan(summary.requestedAt, now, PENDING_STALE_MS);
   const pending =
     (summary?.status === "pending" && !summaryStuck) ||
-    drafts.some((d) => (d.status === "pending" && !d.stuck) || d.saving);
+    drafts.some(
+      (d) =>
+        (d.status === "pending" && !d.stuck) ||
+        d.saving ||
+        d.status === "scheduled" ||
+        d.status === "sending",
+    );
   return (
     <ThreadView
       view={view}

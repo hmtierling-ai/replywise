@@ -106,6 +106,11 @@ export function ThreadView({
         defaultTone={defaultTone}
         hasValidKey={hasValidKey}
         mailboxEmail={view.mailbox.emailAddress}
+        gmailThreadHref={
+          view.mailbox.provider === "gmail"
+            ? gmailThreadUrl(view.mailbox.emailAddress, view.providerThreadId)
+            : null
+        }
         now={now}
       />
     </article>
