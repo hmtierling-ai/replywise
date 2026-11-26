@@ -33,7 +33,15 @@ export async function acquireGmailSearchSlot(
 ): Promise<GmailSearchSlot> {
   const lock = `rw:gmail-search:lock:${userId}`;
   if (!(await store.setIfAbsent(lock, GMAIL_SEARCH_LOCK_MS))) return { ok: false };
-  if (!(await countGmailRequest(store, userId, now))) {
+  let allowed: boolean;
+  try {
+    allowed = await countGmailRequest(store, userId, now);
+  } catch (error) {
+    // The count failed closed; do not also lock the user out for GMAIL_SEARCH_LOCK_MS.
+    await store.remove(lock).catch(() => undefined);
+    throw error;
+  }
+  if (!allowed) {
     await store.remove(lock);
     return { ok: false };
   }

@@ -53,7 +53,12 @@ export function getLimiterStore(): LimiterStore {
     async increment(key, ttlMs) {
       await ready(redis);
       const results = await redis.multi().incr(key).pexpire(key, ttlMs).exec();
-      return Number(results?.[0]?.[1] ?? 0);
+      // Fail closed: a missing or failed INCR must never read as "0 requests so far".
+      const incr = results?.[0];
+      if (!incr || incr[0]) throw new Error("redis limiter increment failed");
+      const n = Number(incr[1]);
+      if (!Number.isFinite(n)) throw new Error("redis limiter increment failed");
+      return n;
     },
     async remove(key) {
       await ready(redis);

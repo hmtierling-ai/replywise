@@ -19,6 +19,15 @@ describe("acquireGmailSearchSlot", () => {
     expect((await acquireGmailSearchSlot(store, "u1", NOW)).ok).toBe(true);
   });
 
+  it("rethrows a failed count without keeping the user's lock", async () => {
+    const store = memoryStore();
+    store.increment = async () => {
+      throw new Error("redis limiter increment failed");
+    };
+    await expect(acquireGmailSearchSlot(store, "u1", NOW)).rejects.toThrow();
+    expect(store.keys.size).toBe(0);
+  });
+
   it("allows 30 Gmail requests per minute, then refuses until the next minute", async () => {
     const store = memoryStore();
     for (let i = 0; i < GMAIL_SEARCHES_PER_MINUTE; i++) {

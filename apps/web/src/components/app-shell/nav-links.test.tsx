@@ -18,7 +18,7 @@ describe("NavLinks", () => {
 });
 
 describe("NavLinksView counts", () => {
-  it("shows a hidden count badge without changing link names", () => {
+  it("shows a visual count badge and announces the exact count in the link name", () => {
     render(
       <NavLinksView
         items={buildNavItems()}
@@ -29,7 +29,7 @@ describe("NavLinksView counts", () => {
           other: 150,
           categories: {
             urgent: 0,
-            important: 0,
+            important: 1,
             needs_reply: 2,
             informational: 0,
             low_priority: 0,
@@ -37,8 +37,10 @@ describe("NavLinksView counts", () => {
         }}
       />,
     );
-    expect(screen.getByRole("link", { name: "Other" })).toHaveTextContent("99+");
-    expect(screen.getByRole("link", { name: "Needs Reply" })).toHaveTextContent("2");
+    expect(screen.getByRole("link", { name: "Other, 150 threads" })).toHaveTextContent("99+");
+    expect(screen.getByRole("link", { name: "Needs Reply, 2 threads" })).toHaveTextContent("2");
+    expect(screen.getByRole("link", { name: "All mail, 12 threads" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Important, 1 thread" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Urgent" })).not.toHaveTextContent(/\d/);
   });
 });

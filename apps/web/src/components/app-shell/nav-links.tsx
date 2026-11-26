@@ -66,9 +66,12 @@ export function NavLinksView({
             <Icon className="size-4 shrink-0" aria-hidden />
             {item.label}
             {count ? (
-              <span aria-hidden className="ml-auto text-xs tabular-nums text-muted-foreground">
-                {count > 99 ? "99+" : count}
-              </span>
+              <>
+                <span aria-hidden className="ml-auto text-xs tabular-nums text-muted-foreground">
+                  {count > 99 ? "99+" : count}
+                </span>
+                <span className="sr-only">{`, ${count} ${count === 1 ? "thread" : "threads"}`}</span>
+              </>
             ) : null}
           </Link>
         );

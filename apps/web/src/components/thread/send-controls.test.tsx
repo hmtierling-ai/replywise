@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_BODY } from "@/lib/draft-body";
 import { SendControls } from "./send-controls";
 
 const { scheduleSendAction, refresh } = vi.hoisted(() => ({
@@ -44,6 +45,19 @@ describe("SendControls", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send…" }));
     expect(screen.getByRole("alert")).toHaveTextContent("unsaved edits");
     expect(screen.queryByRole("button", { name: "Send now" })).toBeNull();
+  });
+
+  it("compares the editor the way the server normalizes it (line endings and length cap)", async () => {
+    const long = "a".repeat(MAX_BODY);
+    render(
+      <>
+        <textarea id="draft-body-d2" aria-label="Reply draft" defaultValue={`${long}\r\nextra`} />
+        <SendControls draftId="d2" savedBody={long} to="Ada <ada@x.com>" subject="Re: Contract" />
+      </>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send…" }));
+    expect(screen.queryByText(/unsaved edits/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Send now" })).toBeInTheDocument();
   });
 
   it("shows the fixed copy when the action refuses", async () => {

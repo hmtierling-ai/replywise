@@ -5,7 +5,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@replywise/queue", () => ({ createProducerConnection: () => ({}) }));
 vi.mock("./env", () => ({ getEnv: () => ({ REDIS_URL: "redis://x" }) }));
 
-import { READY_TIMEOUT_MS, ready } from "./redis-limiter";
+import { getLimiterStore, READY_TIMEOUT_MS, ready } from "./redis-limiter";
 
 class FakeRedis extends EventEmitter {
   status = "connecting";
@@ -45,5 +45,38 @@ describe("ready", () => {
     await assertion;
     expect(redis.listenerCount("ready")).toBe(0);
     expect(redis.listenerCount("error")).toBe(0);
+  });
+});
+
+describe("getLimiterStore increment", () => {
+  function storeWith(results: Array<[Error | null, unknown]> | null) {
+    const multi = { incr: () => multi, pexpire: () => multi, exec: async () => results };
+    (globalThis as { replywiseLimiterRedis?: unknown }).replywiseLimiterRedis = {
+      status: "ready",
+      multi: () => multi,
+    };
+    return getLimiterStore();
+  }
+  afterEach(() => {
+    delete (globalThis as { replywiseLimiterRedis?: unknown }).replywiseLimiterRedis;
+  });
+
+  it("returns the counter INCR reported", async () => {
+    await expect(
+      storeWith([
+        [null, 3],
+        [null, 1],
+      ]).increment("k", 1_000),
+    ).resolves.toBe(3);
+  });
+
+  it("fails closed when INCR reports an error or no result", async () => {
+    await expect(
+      storeWith([
+        [new Error("WRONGTYPE"), null],
+        [null, 1],
+      ]).increment("k", 1_000),
+    ).rejects.toThrow();
+    await expect(storeWith(null).increment("k", 1_000)).rejects.toThrow();
   });
 });

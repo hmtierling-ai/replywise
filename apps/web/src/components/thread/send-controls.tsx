@@ -13,6 +13,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { normalizeBody } from "@/lib/draft-body";
 import { sendActionError } from "@/lib/draft-messages";
 
 const PREVIEW_CHARS = 300;
@@ -42,10 +43,10 @@ export function SendControls({
 
   function onOpenChange(next: boolean) {
     if (next) {
-      // The editor is the draft's textarea; unsaved edits must be saved before sending.
+      // The editor is the draft's textarea; unsaved edits must be saved before sending. Same
+      // normalization as the server, so "unsaved" means what saving would actually change.
       const field = document.getElementById(`draft-body-${draftId}`);
-      const current =
-        field instanceof HTMLTextAreaElement ? field.value.replace(/\r\n?/g, "\n") : savedBody;
+      const current = field instanceof HTMLTextAreaElement ? normalizeBody(field.value) : savedBody;
       setDirty(current !== savedBody);
       setError(null);
     }
