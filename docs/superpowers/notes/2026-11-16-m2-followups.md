@@ -90,3 +90,20 @@ The final whole-branch review verdict was "ready to merge with fixes"; the fixes
 - Reply recipients are validated strictly (ASCII local@domain); internationalised addresses are refused with 'There is no message from someone else to reply to.' rather than risk header injection.
 - The reply MIME module is `packages/mail/src/mime/replyMime.ts` (not `reply.ts`) because the no-send guard rejects `/reply` paths.
 - Deferred: a Redis outage at web cold start can still hang an enqueue until the 5-minute stale window; per-user rate limits on Summarize/Generate remain M6.
+
+## M6 decisions to revisit
+
+- Sending uses Gmail drafts/send after a 10 s undo window; only a rate limit (before the call or as Gmail's answer) is retried. Any other failure of the send call is `send_unconfirmed` (5xx, timeout, network, malformed success) or `send_rejected` (4xx) and is never retried.
+- A `send_attempted` marker in `reply_drafts.error` is set just before the send call and cleared only on a rate-limit answer, so a crashed or duplicate job never calls Gmail twice; such rows become `send_unconfirmed` after 10 minutes.
+- Scheduled sends that never ran within 10 minutes of `send_at` (job lost and not recovered) fail as `internal` (nothing was sent; "Try again" is offered). Overdue ones (> 60 s) are re-enqueued first with the same job id.
+- "Try again" is offered for every send_failed code that proves nothing was sent (send_rejected and the M5 save codes), not only send_rejected.
+- The send dialog refuses to confirm while the editor has unsaved edits ("Save edits" first), so the confirmed body is always the stored one; the action re-checks it (`draft_changed`).
+- Sends run on their own `send` queue (concurrency 2) so AI jobs never delay a confirmed send.
+- The stuck-send scan is its own minutely job (`maintenance.recoverSends`), not part of an existing one.
+- The no-send guard's `/send` pattern no longer matches module paths like `./jobs/send-draft` (needed for the spec's file name); every `…/send` endpoint is still blocked.
+- "Other" = INBOX + a Promotions/Social/Updates label + no message from the user. The Other view shows INBOX threads only; archived tab mail is found by search. Classification is skipped only in the minutely scan (sync never enqueued classification since M4).
+- Nav counts are total threads per view, as `aria-hidden` badges; they refresh on full loads and Server Actions, not on every client navigation.
+- Local search uses ILIKE + pg_trgm on subject, snippet and a generated `participants_text`; no body search, limit 50, newest first.
+- Gmail search: one in-flight search per user plus 30 Gmail requests per minute (searches and imports share the window), Redis fixed-minute counters. A recent inbox thread imported by hand is classified like any synced thread; old imports never are.
+- `E2E_FAKE_GMAIL_URL` (loopback only) points the web app's Gmail client at the e2e fake.
+- Deferred: Outlook sending/search/import, reply-all, attachments, a setting for which Gmail tabs are hidden.

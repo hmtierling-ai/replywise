@@ -44,7 +44,8 @@ export default function AiSettingsPage({ searchParams }: PageProps<"/settings/ai
       </Link>
       <h1 className="mt-3 text-xl font-semibold tracking-tight">AI</h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        Replywise classifies your mail with your own Anthropic key. It never sends email.
+        Replywise classifies your mail with your own Anthropic key. It never sends email without
+        your confirmation.
       </p>
       <Suspense fallback={null}>
         <Flash searchParams={searchParams} />

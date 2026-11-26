@@ -44,7 +44,9 @@ export function SignUpForm() {
     <Card>
       <CardHeader>
         <CardTitle>Create your account</CardTitle>
-        <CardDescription>Replywise drafts replies. It never sends email for you.</CardDescription>
+        <CardDescription>
+          Replywise drafts replies. It never sends email without your confirmation.
+        </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
         <CardContent className="flex flex-col gap-4">
