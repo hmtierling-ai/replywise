@@ -1,7 +1,7 @@
 import { type AiProvider, createAnthropicProvider } from "@replywise/ai";
 import type { WorkerEnv } from "@replywise/config";
 import { createDb } from "@replywise/db";
-import type { GmailApiFactory, GmailDraftsFactory } from "@replywise/mail";
+import type { GmailApiFactory, GmailDraftsFactory, GmailSendFactory } from "@replywise/mail";
 import type { Logger } from "@replywise/observability";
 import { createJobQueue, createJobWorker, createRedisConnection } from "@replywise/queue";
 import type { Worker } from "bullmq";
@@ -12,7 +12,9 @@ import { generateDraftHandler } from "./jobs/generate-draft";
 import { purgeBodiesHandler } from "./jobs/purge-bodies";
 import { purgeOAuthStatesHandler } from "./jobs/purge-oauth-states";
 import { reconcileSyncSchedulesHandler } from "./jobs/reconcile-sync-schedules";
+import { recoverSendsHandler } from "./jobs/recover-sends";
 import { saveDraftHandler } from "./jobs/save-draft";
+import { sendDraftHandler } from "./jobs/send-draft";
 import { summarizeThreadHandler } from "./jobs/summarize-thread";
 import { syncMailboxHandler } from "./jobs/sync-mailbox";
 import { safeErrorFields } from "./log-error";
@@ -21,10 +23,12 @@ export const PURGE_BODIES_SCHEDULER_ID = "maintenance.purgeBodies:hourly";
 export const PURGE_OAUTH_STATES_SCHEDULER_ID = "maintenance.purgeOAuthStates:hourly";
 export const RECONCILE_SCHEDULER_ID = "maintenance.reconcileSyncSchedules:minutely";
 export const ENQUEUE_CLASSIFICATIONS_SCHEDULER_ID = "maintenance.enqueueClassifications:minutely";
+export const RECOVER_SENDS_SCHEDULER_ID = "maintenance.recoverSends:minutely";
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_MINUTE_MS = 60 * 1000;
 const SYNC_CONCURRENCY = 4;
 const AI_CONCURRENCY = 2;
+const SEND_CONCURRENCY = 2;
 
 export async function startWorker(
   env: WorkerEnv,
@@ -34,6 +38,7 @@ export async function startWorker(
     gmail?: GmailApiFactory;
     ai?: AiProvider;
     gmailDrafts?: GmailDraftsFactory;
+    gmailSend?: GmailSendFactory;
   } = {},
 ) {
   const { db, close: closeDb } = createDb(env.DATABASE_URL);
@@ -41,6 +46,7 @@ export async function startWorker(
   const maintenanceConnection = createRedisConnection(env.REDIS_URL);
   const syncConnection = createRedisConnection(env.REDIS_URL);
   const aiConnection = createRedisConnection(env.REDIS_URL);
+  const sendConnection = createRedisConnection(env.REDIS_URL);
   const prefix = options.queuePrefix ? { prefix: options.queuePrefix } : {};
   const queue = createJobQueue(queueConnection, prefix);
   const syncDeps = buildSyncDeps(env, db, options.gmail);
@@ -58,6 +64,7 @@ export async function startWorker(
       "maintenance.purgeOAuthStates": purgeOAuthStatesHandler({ db, logger }),
       "maintenance.reconcileSyncSchedules": reconcileSyncSchedulesHandler({ db, queue, logger }),
       "maintenance.enqueueClassifications": enqueueClassificationsHandler({ db, queue, logger }),
+      "maintenance.recoverSends": recoverSendsHandler({ db, queue, logger }),
     },
     { concurrency: 1, ...prefix },
   );
@@ -78,7 +85,20 @@ export async function startWorker(
     },
     { concurrency: AI_CONCURRENCY, ...prefix },
   );
-  for (const worker of [maintenanceWorker, syncWorker, aiWorker] as Worker[]) {
+  // Sends get their own queue so slow AI jobs never delay a confirmed send.
+  const sendWorker = createJobWorker(
+    "send",
+    sendConnection,
+    {
+      "draft.send": sendDraftHandler({
+        ...generationDeps,
+        queue,
+        ...(options.gmailSend ? { gmailSend: options.gmailSend } : {}),
+      }),
+    },
+    { concurrency: SEND_CONCURRENCY, ...prefix },
+  );
+  for (const worker of [maintenanceWorker, syncWorker, aiWorker, sendWorker] as Worker[]) {
     worker.on("failed", (job, error) => {
       logger.error(
         { jobId: job?.id, jobName: job?.name, error: safeErrorFields(error) },
@@ -111,17 +131,29 @@ export async function startWorker(
     {},
     ONE_MINUTE_MS,
   );
+  await queue.scheduleRepeating(
+    RECOVER_SENDS_SCHEDULER_ID,
+    "maintenance.recoverSends",
+    {},
+    ONE_MINUTE_MS,
+  );
   logger.info("worker started");
 
   return {
     async stop(): Promise<void> {
-      await Promise.all([maintenanceWorker.close(), syncWorker.close(), aiWorker.close()]);
+      await Promise.all([
+        maintenanceWorker.close(),
+        syncWorker.close(),
+        aiWorker.close(),
+        sendWorker.close(),
+      ]);
       await queue.close();
       await Promise.all([
         queueConnection.quit(),
         maintenanceConnection.quit(),
         syncConnection.quit(),
         aiConnection.quit(),
+        sendConnection.quit(),
       ]);
       await closeDb();
       logger.info("worker stopped");

@@ -26,6 +26,7 @@ import {
   PURGE_BODIES_SCHEDULER_ID,
   PURGE_OAUTH_STATES_SCHEDULER_ID,
   RECONCILE_SCHEDULER_ID,
+  RECOVER_SENDS_SCHEDULER_ID,
   startWorker,
 } from "./main";
 
@@ -171,6 +172,7 @@ describe("startWorker", () => {
       expect(ids).toContain(PURGE_OAUTH_STATES_SCHEDULER_ID);
       expect(ids).toContain(RECONCILE_SCHEDULER_ID);
       expect(ids).toContain(ENQUEUE_CLASSIFICATIONS_SCHEDULER_ID);
+      expect(ids).toContain(RECOVER_SENDS_SCHEDULER_ID);
     } finally {
       await inspector.close();
       await connection.quit();

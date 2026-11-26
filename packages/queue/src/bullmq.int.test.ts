@@ -114,4 +114,16 @@ describe("BullMQ job queue", () => {
     closers.push(() => queue.close());
     await expect(queue.enqueue("mailbox.sync", { mailAccountId: "not-a-uuid" })).rejects.toThrow();
   });
+
+  it("removes a delayed job by id and ignores unknown ids", async () => {
+    const queue = createJobQueue(connection(), { prefix });
+    closers.push(() => queue.close());
+    const inspector = new Queue("maintenance", { connection: connection(), prefix });
+    closers.push(() => inspector.close());
+    await queue.enqueue("maintenance.purgeBodies", {}, { jobId: "later", delayMs: 60_000 });
+    expect(await inspector.getJob("later")).toBeTruthy();
+    await queue.removeJob("maintenance", "later");
+    expect(await inspector.getJob("later")).toBeFalsy();
+    await expect(queue.removeJob("maintenance", "missing")).resolves.toBeUndefined();
+  });
 });

@@ -1,23 +1,14 @@
-import { aad } from "@replywise/crypto";
 import {
-  type ClassificationSource,
   type DraftRow,
   failDraftSave,
   getDraftForWorker,
   getThreadForClassification,
-  getWritingPreferences,
   insertAuditLog,
   markDraftSaved,
   recordProviderDraftId,
   SAVE_STALE_MS,
 } from "@replywise/db";
-import {
-  buildReplyMime,
-  type GmailDraftsApi,
-  type GmailDraftsFactory,
-  ProviderHttpError,
-  toBase64Url,
-} from "@replywise/mail";
+import { type GmailDraftsApi, type GmailDraftsFactory, ProviderHttpError } from "@replywise/mail";
 import {
   getValidAccessToken,
   MailAccountNotFoundError,
@@ -27,7 +18,7 @@ import {
 import type { JobContext } from "@replywise/queue";
 import { UnrecoverableError } from "bullmq";
 import { safeErrorFields } from "../log-error";
-import { errorCode, isRetryableGmailError } from "./generation-errors";
+import { errorCode, isRetryableGmailError, NoRecipientError } from "./generation-errors";
 import {
   FIRST_ATTEMPT,
   type GenerationDeps,
@@ -35,6 +26,7 @@ import {
   rethrowSafely,
   withWriteRetries,
 } from "./generation-shared";
+import { buildDraftRaw } from "./gmail-draft-write";
 
 export type SaveDraftDeps = Pick<GenerationDeps, "db" | "encryptor" | "logger"> & {
   gmailDrafts: GmailDraftsFactory;
@@ -82,26 +74,11 @@ async function save(deps: SaveDraftDeps, draftId: string, context: JobContext): 
   // Only Gmail drafts exist here: never call another provider's API.
   if (source.provider !== "gmail") return giveUp(new Error("unsupported_provider"));
 
-  const target = replyTarget(draft, source);
-  if (!target) return failDraftSave(deps.db, draftId, "no_recipient");
-
   let raw: string;
   try {
-    const body = await deps.encryptor.decryptString(draft.bodyCiphertext, aad.replyDraft(draftId));
-    const { signature } = await getWritingPreferences(deps.db, source.userId);
-    raw = toBase64Url(
-      buildReplyMime({
-        from: { name: null, address: source.mailboxEmail },
-        to: target.fromAddress,
-        subject: source.thread.subject,
-        inReplyTo: target.internetMessageId,
-        references: source.messages
-          .map((m) => m.internetMessageId)
-          .filter((id): id is string => Boolean(id)),
-        body: signature ? `${body}\n\n${signature}` : body,
-      }),
-    );
+    raw = await buildDraftRaw(deps, draft, source);
   } catch (error) {
+    if (error instanceof NoRecipientError) return failDraftSave(deps.db, draftId, "no_recipient");
     if (errorCode(error) === "no_recipient") return giveUp(error);
     throw error;
   }
@@ -180,13 +157,4 @@ async function save(deps: SaveDraftDeps, draftId: string, context: JobContext): 
     deps.logger.warn({ draftId, error: safeErrorFields(error) }, "audit entry not written");
   });
   deps.logger.info({ threadId: source.thread.id, draftId }, "draft saved to gmail");
-}
-
-/** The message being answered: the one the draft was made for, else the newest from someone else. */
-function replyTarget(draft: DraftRow, source: ClassificationSource) {
-  // Never answer one of the user's own messages.
-  const chosen = draft.forMessageId
-    ? source.messages.find((m) => m.id === draft.forMessageId && !m.isFromUser)
-    : undefined;
-  return chosen ?? source.messages.findLast((m) => !m.isFromUser) ?? null;
 }
