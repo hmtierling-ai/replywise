@@ -6,7 +6,7 @@
 
 ## 1. Product summary
 
-Replywise connects to a user's Gmail and Outlook mailboxes, classifies incoming mail by urgency and importance with an explanation, summarizes threads, and generates reply suggestions that the user can edit, regenerate in another tone, and save **as drafts in the original provider**. Replywise **never sends email** — not automatically, not on user click. Sending happens only in the user's own mail client.
+Replywise connects to a user's Gmail and Outlook mailboxes, classifies incoming mail by urgency and importance with an explanation, summarizes threads, and generates reply suggestions that the user can edit, regenerate in another tone, and save **as drafts in the original provider**. Replywise **never sends email automatically**: since M6 it can send a reply only after an explicit user click plus a confirmation dialog, with a 10-second undo window (Gmail only; see `docs/superpowers/specs/2026-11-25-m6-send-sent-filter-search-design.md`). AI jobs and auto-draft never send.
 
 ### Decisions made during brainstorming
 
@@ -158,7 +158,7 @@ There are **two independent OAuth relationships**, deliberately separated:
 - Each encrypt call generates a fresh 256-bit data key (DEK), encrypts the plaintext with AES-256-GCM (random 96-bit IV), and wraps the DEK with a key-encryption key (KEK) held by a `KeyProvider`.
 - Blob format: `version(1) | keyIdLen(1) | keyId | wrappedDekLen(2) | wrappedDek | iv(12) | tag(16) | ciphertext`. Self-describing, so KEK rotation is lazy: new writes use the current KEK, old blobs still decrypt by `keyId`, a maintenance job re-wraps.
 - **Associated data (AAD)** binds each blob to its owner and purpose, e.g. `ai_credential:{userId}:anthropic`, `mail_tokens:{mailAccountId}`, `message_body:{messageId}`. A blob copied to another row fails to decrypt.
-- **KeyProviders:** `LocalKeyProvider` (KEKs from env `LOCAL_KEKS="v1:<base64-32-bytes>,…"`, dev/test and small self-hosted) and `AwsKmsKeyProvider` / `GcpKmsKeyProvider` (M6, production — KEK never leaves KMS).
+- **KeyProviders:** `LocalKeyProvider` (KEKs from env `LOCAL_KEKS="v1:<base64-32-bytes>,…"`, dev/test and small self-hosted) and `AwsKmsKeyProvider` / `GcpKmsKeyProvider` (M7, production — KEK never leaves KMS).
 
 **AI API key handling:**
 - Entered once in Settings over HTTPS → Server Action validates format (`sk-ant-…`) and liveness (`validateKey`, a cheap Models API call) → encrypted → stored. The browser only ever sees `key_hint` (`••••abcd`) and status.
@@ -188,9 +188,9 @@ There are **two independent OAuth relationships**, deliberately separated:
 
 | Risk | Mitigation |
 |---|---|
-| Replywise sends an email | `MailProvider` has no send method; Graph `Mail.Send` never requested; CI test fails on any reference to Gmail `messages/send`, `drafts/send`, or Graph `/sendMail`, `/send`; drafts are created only in `draft.save`. |
+| Replywise sends an email the user did not confirm | `MailProvider` has no send method; Graph `Mail.Send` never requested; sending exists only as the M6 confirmed-reply flow (confirm dialog → `scheduled` row → 10 s undo → worker `draft.send` → Gmail `drafts.send`); the AI has no tools and auto-draft never sends; CI test fails on any reference to Gmail `messages/send`, Graph `/sendMail`, `/send`, `/reply`, `/forward`, and on `drafts/send` outside `packages/mail/src/gmail-send.ts` (importable only by the worker send job); sends are rate-limited (20/user/hour), never retried after an ambiguous failure, and audit-logged. |
 | Token / AI-key theft from DB | Envelope encryption with AAD (§6); KEK in KMS in production; DB credentials scoped per app; backups encrypted. |
-| Secrets in logs, errors, analytics | pino redaction paths; never log request/response bodies of mail/AI calls; env parsing errors list key names only; Sentry-style tools configured with scrubbing (M6). |
+| Secrets in logs, errors, analytics | pino redaction paths; never log request/response bodies of mail/AI calls; env parsing errors list key names only; Sentry-style tools configured with scrubbing (M7). |
 | Prompt injection inside emails | Email content is placed in clearly delimited untrusted blocks; the model has **no tools**; outputs are schema-validated (Zod) and rendered as plain text; worst case is a bad suggestion the user must review — it can never send or exfiltrate via actions. Reply drafts are never auto-saved unless the user enabled auto-draft, and even then are only drafts. |
 | OAuth CSRF / code injection | `state` single-use, bound to the session user, 10-min TTL; PKCE S256; exact redirect URIs registered. |
 | Over-broad scopes | Minimal scopes (§5); verify granted scopes at callback; no send scopes. |
@@ -213,7 +213,7 @@ There are **two independent OAuth relationships**, deliberately separated:
 - Thread view: messages, on-demand summary, reply composer: generate, edit, regenerate with tone/instructions, **Save to drafts** (creates/updates provider draft) with a link to open it in Gmail/Outlook.
 - Premium UI: light/dark/system theme, responsive (mobile read + draft), keyboard navigation (`j/k`, `e`… and `⌘K` palette).
 
-**Out (post-MVP):** billing, teams/workspaces, push notifications, additional AI providers (interface exists), attachment content analysis, full-text search, snooze/labels management, mobile apps, any send capability (permanently out).
+**Out (post-MVP):** billing, teams/workspaces, push notifications, additional AI providers (interface exists), attachment content analysis, full-text body search, snooze/labels management, mobile apps, composing new messages / reply-all / forward, Outlook sending. (Confirmed reply sending, Sent sync, the Gmail tab filter and metadata search arrive in M6.)
 
 ## 10. Roadmap
 
@@ -226,7 +226,8 @@ Each milestone gets its own implementation plan and ends in working, tested soft
 | **M3 Sync engine** | Backfill + incremental sync for both providers, body cache + purge, thread list UI (unclassified), thread view with sanitized HTML. |
 | **M4 AI classification** | AI key settings, `@replywise/ai` + Anthropic adapter, `thread.classify`, intelligent inbox tabs with reasons, usage tracking. |
 | **M5 Summaries & drafts** | Summary, reply generation with tones, editor, regenerate, save/update provider drafts, auto-draft toggle, send-guard CI test. |
-| **M6 Hardening & launch** | KMS key provider, nonce-based CSP, per-user rate limits, error tracking with scrubbing, e2e suite across flows, Google verification/CASA + Microsoft publisher verification prep, privacy policy. |
+| **M6 Send, Sent, filter, search** | Confirmed reply sending with 10 s undo (Gmail), Sent sync + Sent view, hide Gmail Promotions/Social/Updates as "Other" (not auto-classified), local search + "search all of Gmail" with import. Spec: `docs/superpowers/specs/2026-11-25-m6-send-sent-filter-search-design.md`. |
+| **M7 Hardening & launch** | KMS key provider, nonce-based CSP, per-user rate limits, error tracking with scrubbing, e2e suite across flows, Google verification/CASA + Microsoft publisher verification prep, privacy policy. |
 | Post-MVP | Push sync, billing (Stripe), more AI providers, teams. |
 
 ## 11. Folder structure
