@@ -30,6 +30,20 @@ const FORBIDDEN = [
   /\/(reply|replyAll|forward)\b/i,
 ];
 
+/** A reference to the send module, however the specifier is spelled. */
+const SEND_SPECIFIER = /gmail-send(\.[cm]?[jt]s)?["'`]/;
+
+/** Endpoint patterns forbidden in the web app. */
+const WEB_FORBIDDEN = [
+  /sendMail/i,
+  /messages\/send/i,
+  /drafts\/send/i,
+  /messages\.send/i,
+  /drafts\.send/i,
+  /\/send(?![\w-])/i,
+  /\/(reply|replyAll|forward)(?![\w-])/i,
+];
+
 const posix = (file: string) => relative(REPO, file).split(sep).join("/");
 
 function sourceFiles(dir: string, extensions: string[]): string[] {
@@ -67,6 +81,25 @@ describe("no-send guard", () => {
     expect(send.test('from "./jobs/send-draft"')).toBe(false);
   });
 
+  it("flags every spelling of the send module specifier but not look-alikes", () => {
+    expect(SEND_SPECIFIER.test('export * from "./gmail-send"')).toBe(true);
+    expect(SEND_SPECIFIER.test('export * from "./gmail-send.js"')).toBe(true);
+    expect(SEND_SPECIFIER.test("export * from './gmail-send.ts'")).toBe(true);
+    expect(SEND_SPECIFIER.test("import(`@replywise/mail/gmail-send`)")).toBe(true);
+    expect(SEND_SPECIFIER.test('from "./gmail-sender-x"')).toBe(false);
+  });
+
+  it("covers Graph send and reply/forward endpoints in the web scan", () => {
+    const hits = (text: string) => WEB_FORBIDDEN.some((p) => p.test(text));
+    expect(hits("`/me/messages/$" + "{id}/send`")).toBe(true);
+    expect(hits('/me/messages/x/forward"')).toBe(true);
+    expect(hits('from "./reply-composer"')).toBe(false);
+  });
+
+  it("does not expose the send factory on the main package index", async () => {
+    expect("createGmailSendApi" in (await import("./index"))).toBe(false);
+  });
+
   it("finds no send endpoints outside the one allowlisted Gmail send module", () => {
     const sources = ROOTS.flatMap((dir) => sourceFiles(dir, [".ts"]));
     expect(sources.length).toBeGreaterThan(10);
@@ -96,23 +129,16 @@ describe("no-send guard", () => {
       .flatMap((file) =>
         readFileSync(file, "utf8")
           .split("\n")
-          .filter((line) => /gmail-send["']/.test(line) && !/^\s*(export|import) type\b/.test(line))
+          .filter((line) => SEND_SPECIFIER.test(line) && !/^\s*(export|import) type\b/.test(line))
           .map((line) => `${posix(file)}: ${line.trim()}`),
       );
     expect(valueRefs).toEqual([]);
   });
 
   it("keeps every send endpoint out of the web app", () => {
-    const patterns = [
-      /sendMail/i,
-      /messages\/send/i,
-      /drafts\/send/i,
-      /messages\.send/i,
-      /drafts\.send/i,
-    ];
     const offenders = sourceFiles(join(REPO, "apps/web/src"), [".ts", ".tsx"]).flatMap((file) => {
       const text = readFileSync(file, "utf8");
-      return patterns.filter((p) => p.test(text)).map((p) => `${posix(file)}: ${p}`);
+      return WEB_FORBIDDEN.filter((p) => p.test(text)).map((p) => `${posix(file)}: ${p}`);
     });
     expect(offenders).toEqual([]);
   });
