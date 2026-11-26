@@ -24,6 +24,7 @@ export default defineConfig({
       ...(process.env as Record<string, string>),
       GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID || "e2e-gmail-client-id",
       GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET || "e2e-gmail-client-secret",
+      E2E_FAKE_GMAIL_URL: process.env.E2E_FAKE_GMAIL_URL || "http://127.0.0.1:4010",
     },
   },
 });
