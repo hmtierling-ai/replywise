@@ -21,6 +21,14 @@ export const webEnvSchema = baseEnvSchema.extend({
   BETTER_AUTH_SECRET: z.string().min(32),
   GOOGLE_CLIENT_ID: z.string().min(1).optional(),
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
+  /** e2e only: a loopback origin standing in for gmail.googleapis.com. Never another host. */
+  E2E_FAKE_GMAIL_URL: z
+    .url()
+    .refine(
+      (value) => ["localhost", "127.0.0.1"].includes(new URL(value).hostname),
+      "must be a loopback URL",
+    )
+    .optional(),
 });
 
 export type WorkerEnv = z.output<typeof workerEnvSchema>;

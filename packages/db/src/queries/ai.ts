@@ -9,6 +9,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import type { DbExecutor } from "../client";
 import { aiCredentials, aiUsageEvents, threadInsights, userPreferences } from "../schema/ai";
 import { mailAccounts, messages, threads } from "../schema/mail";
+import { otherThreadSql } from "./threads";
 
 type CredentialStatus = "unverified" | "valid" | "invalid";
 
@@ -271,7 +272,7 @@ export async function summarizeAiUsage(
 
 /**
  * Inbox threads whose last message is at or after `since`, whose newest message is not from the
- * user, that are not yet classified through that message, and whose owner has a valid key on an
+ * user, that are not Other (spec M6 §4), that are not yet classified through that message, and whose owner has a valid key on an
  * active mailbox. Newest first.
  */
 export async function listThreadsPendingClassification(
@@ -300,6 +301,7 @@ export async function listThreadsPendingClassification(
     left join ${threadInsights} ti on ti.thread_id = t.id
     where t.last_message_at >= ${since.toISOString()}::timestamptz
       and t.provider_labels @> array['INBOX']::text[]
+      and not ${otherThreadSql(sql`t.id`, sql`t.provider_labels`)}
       and latest.is_from_user = false
       and (ti.thread_id is null or ti.classified_through_message_id <> latest.id)
     order by t.last_message_at desc

@@ -1,14 +1,29 @@
 "use client";
 
-import { BellOff, Flame, Inbox, Info, type LucideIcon, Reply, Settings, Star } from "lucide-react";
+import type { ThreadViewCounts } from "@replywise/db";
+import {
+  BellOff,
+  Flame,
+  Inbox,
+  Info,
+  Layers,
+  type LucideIcon,
+  Reply,
+  Send,
+  Settings,
+  Star,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { use } from "react";
 import { cn } from "@/lib/utils";
-import { isActive, type NavIcon, type NavItem } from "./nav-items";
+import { isActive, type NavIcon, type NavItem, navCount } from "./nav-items";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
   inbox: Inbox,
   settings: Settings,
+  sent: Send,
+  other: Layers,
   urgent: Flame,
   important: Star,
   needs_reply: Reply,
@@ -28,12 +43,14 @@ export function NavLinksView({
   label,
   onNavigate,
   pathname,
-}: NavLinksProps & { pathname: string | null }) {
+  counts,
+}: NavLinksProps & { pathname: string | null; counts?: ThreadViewCounts | null }) {
   return (
     <nav aria-label={label} className="flex flex-col gap-0.5">
       {items.map((item) => {
         const Icon = ICONS[item.icon];
         const active = pathname !== null && isActive(pathname, item.href);
+        const count = navCount(counts, item.countKey);
         return (
           <Link
             key={item.href}
@@ -48,6 +65,14 @@ export function NavLinksView({
           >
             <Icon className="size-4 shrink-0" aria-hidden />
             {item.label}
+            {count ? (
+              <>
+                <span aria-hidden className="ml-auto text-xs tabular-nums text-muted-foreground">
+                  {count > 99 ? "99+" : count}
+                </span>
+                <span className="sr-only">{`, ${count} ${count === 1 ? "thread" : "threads"}`}</span>
+              </>
+            ) : null}
           </Link>
         );
       })}
@@ -55,7 +80,12 @@ export function NavLinksView({
   );
 }
 
-/** Reads the current path. Must render inside <Suspense> under cacheComponents. */
-export function NavLinks(props: NavLinksProps) {
-  return <NavLinksView {...props} pathname={usePathname()} />;
+/** Reads the current path (and the counts promise). Must render inside <Suspense>. */
+export function NavLinks({
+  counts,
+  ...props
+}: NavLinksProps & { counts?: Promise<ThreadViewCounts | null> }) {
+  const pathname = usePathname();
+  const resolved = counts ? use(counts) : null;
+  return <NavLinksView {...props} counts={resolved} pathname={pathname} />;
 }

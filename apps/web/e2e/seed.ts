@@ -12,6 +12,7 @@ import {
   users,
 } from "@replywise/db";
 import { desc, eq } from "drizzle-orm";
+import { FAKE_GMAIL_TOKEN } from "./fake-gmail";
 
 /** Direct DB seeding for e2e. Uses the same DATABASE_URL and LOCAL_KEKS as the server. */
 export async function withSeed<T>(
@@ -34,6 +35,8 @@ export async function withSeed<T>(
         text?: string;
         from?: string;
         at?: Date;
+        labels?: string[];
+        replied?: boolean;
       },
     ) => Promise<string>;
     insight: (
@@ -54,14 +57,26 @@ export async function withSeed<T>(
       userEmail: string,
       threadId: string,
       input: {
-        status: "pending" | "generated" | "edited" | "saved" | "failed";
+        status:
+          | "pending"
+          | "generated"
+          | "edited"
+          | "saved"
+          | "failed"
+          | "scheduled"
+          | "sending"
+          | "sent"
+          | "send_failed";
         body?: string;
         error?: string;
         providerDraftId?: string;
         savedAt?: Date;
         saveRequestedAt?: Date;
+        sendAt?: Date;
+        sentAt?: Date;
       },
     ) => Promise<string>;
+    gmailMailbox: (userEmail: string) => Promise<string>;
   }) => Promise<T>,
 ): Promise<T> {
   const url = process.env.DATABASE_URL;
@@ -116,7 +131,7 @@ export async function withSeed<T>(
             lastMessageAt: sentAt,
             messageCount: 1,
             isUnread: input.unread ?? false,
-            providerLabels: input.unread ? ["INBOX", "UNREAD"] : ["INBOX"],
+            providerLabels: input.labels ?? (input.unread ? ["INBOX", "UNREAD"] : ["INBOX"]),
           })
           .returning({ id: threads.id });
         if (!thread) throw new Error("seed thread failed");
@@ -143,7 +158,50 @@ export async function withSeed<T>(
             .set({ bodyCiphertext: body, bodyExpiresAt: new Date(Date.now() + 86_400_000) })
             .where(eq(messages.id, message.id));
         }
+        if (input.replied) {
+          await db.insert(messages).values({
+            threadId: thread.id,
+            mailAccountId,
+            providerMessageId: `seed-${Math.random().toString(36).slice(2)}`,
+            fromAddress: { name: "Me", address: "me@example.com" },
+            subject: input.subject,
+            snippet: "My reply",
+            sentAt: new Date(sentAt.getTime() + 60_000),
+            isFromUser: true,
+          });
+        }
         return thread.id;
+      },
+      async gmailMailbox(userEmail) {
+        const [user] = await db.select().from(users).where(eq(users.email, userEmail));
+        if (!user) throw new Error(`no user ${userEmail}`);
+        const [row] = await db
+          .insert(mailAccounts)
+          .values({
+            userId: user.id,
+            provider: "gmail",
+            emailAddress: `seed-${Date.now()}@gmail.com`,
+            tokensCiphertext: Buffer.from("pending"),
+            lastSyncedAt: new Date(),
+          })
+          .returning({ id: mailAccounts.id });
+        if (!row) throw new Error("seed gmail mailbox failed");
+        // Real, decryptable tokens far from expiry: the web app calls the fake Gmail with them.
+        const tokens = {
+          accessToken: FAKE_GMAIL_TOKEN,
+          refreshToken: "e2e-refresh-token",
+          expiresAt: new Date(Date.now() + 365 * 86_400_000).toISOString(),
+        };
+        await db
+          .update(mailAccounts)
+          .set({
+            tokensCiphertext: await encryptor.encrypt(
+              JSON.stringify(tokens),
+              aad.mailTokens(row.id),
+            ),
+          })
+          .where(eq(mailAccounts.id, row.id));
+        return row.id;
       },
       async insight(threadId, input) {
         const [latest] = await db
@@ -209,6 +267,8 @@ export async function withSeed<T>(
             providerDraftId: input.providerDraftId ?? null,
             savedAt: input.savedAt ?? null,
             saveRequestedAt: input.saveRequestedAt ?? null,
+            sendAt: input.sendAt ?? null,
+            sentAt: input.sentAt ?? null,
             aiProvider: "anthropic",
             model: "claude-opus-5-5",
           })

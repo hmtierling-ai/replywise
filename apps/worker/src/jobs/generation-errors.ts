@@ -7,6 +7,14 @@ import {
 import { InvalidRecipientError, ProviderHttpError } from "@replywise/mail";
 import { ReauthRequiredError } from "@replywise/mailbox";
 
+/** The thread has no message from someone else to answer. */
+export class NoRecipientError extends Error {
+  constructor() {
+    super("no_recipient");
+    this.name = "NoRecipientError";
+  }
+}
+
 /** Fixed code stored in DB error columns; never derived from provider or email text. */
 export function errorCode(error: unknown): string {
   if (error instanceof AiKeyInvalidError) return "ai_key_invalid";
@@ -14,6 +22,7 @@ export function errorCode(error: unknown): string {
   if (error instanceof AiOutputError) return "ai_bad_output";
   if (isRetryableAiError(error)) return "ai_unavailable";
   if (error instanceof ReauthRequiredError) return "gmail_reauth";
+  if (error instanceof NoRecipientError) return "no_recipient";
   if (error instanceof InvalidRecipientError) return "no_recipient";
   if (error instanceof ProviderHttpError) return "gmail_unavailable";
   return "internal";

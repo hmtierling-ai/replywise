@@ -1,6 +1,6 @@
 # Replywise
 
-AI email assistant: classifies, summarizes and drafts replies into your Gmail/Outlook drafts. Never sends email.
+AI email assistant: classifies, summarizes and drafts replies into your Gmail/Outlook drafts. Never sends email without your confirmation.
 
 Design: `docs/superpowers/specs/2026-11-15-replywise-design.md`
 
@@ -79,7 +79,7 @@ pnpm --filter @replywise/web dev      # terminal 2
 ```
 
 Message bodies are cached encrypted for `body_cache_days` (default 14) and refetched on demand
-when you open an older thread. Replywise only reads mail; it never sends.
+when you open an older thread. Replywise reads your mail and saves drafts; it never sends email without your confirmation.
 
 ## AI classification
 
@@ -90,14 +90,23 @@ The worker scans every minute for inbox threads whose newest message arrived in 
 - Default model: Claude Opus 5.5 (low effort). Claude Haiku 5.5 is available in Settings for much lower cost.
 - Usage per task and model, with an estimate, is shown in Settings → AI.
 - A rejected key pauses classification until you replace it.
-- Email content is sent to Anthropic only for classification, as untrusted data with no tools; Replywise never sends email.
+- Email content is sent to Anthropic only for classification, as untrusted data with no tools; Replywise never sends email without your confirmation.
 
 The worker needs no extra environment variables; keys are per user.
 
 ## Summaries and reply drafts
 
-Open a thread and click **Summarize** for a short AI summary, or choose a tone, add optional instructions and click **Generate reply**. Edit the reply, **Regenerate** it, and click **Save to Gmail**: Replywise creates (or updates) a draft in the same Gmail conversation, with your signature appended. **Replywise never sends email** — open the draft in Gmail to review and send it yourself.
+Open a thread and click **Summarize** for a short AI summary, or choose a tone, add optional instructions and click **Generate reply**. Edit the reply, **Regenerate** it, and click **Save to Gmail**: Replywise creates (or updates) a draft in the same Gmail conversation, with your signature appended. You can also send the reply from Replywise (see below).
 
 - Writing preferences (default tone, reply model, signature, style notes, reply language) live in Settings → AI.
 - Settings → Mailboxes has an optional per-mailbox **auto-draft for Needs Reply** (off by default): Replywise writes a draft in the app with your key for Needs Reply mail from the last 7 days, including when classification first runs; it reaches Gmail only when you click Save.
 - Summaries and replies run in the worker with your key (Opus 5.5 at medium effort by default; Haiku 5.5 is cheaper). Usage appears in Settings → AI.
+
+## Sending replies, Sent, Other and search
+
+- **Send (Gmail only).** Under a draft, click **Send…**. The dialog shows the recipient, the subject and the start of the reply; **Send now** waits 10 seconds with an **Undo** button, then Replywise saves the Gmail draft and sends it with Gmail's send-draft call. Nothing is ever sent without that click: AI jobs and auto-draft never send. At most 20 sends per hour. If Gmail's answer is lost (timeout, 5xx), the reply is marked "may or may not have gone out" and is never retried automatically — check Gmail's Sent folder, then choose **Edit**.
+- **Sent.** Sync now brings in the last 30 days of Inbox **and** Sent; the **Sent** view lists conversations you wrote in.
+- **Other.** Gmail's Promotions, Social and Updates mail you never replied to is kept out of All mail and the AI tabs, is never auto-classified, and is listed under **Other** (with tab filters). Other lists inbox threads only; archived Promotions/Social/Updates mail is still found through search.
+- **Search.** Press `/` (or use the box above the list) to search subjects, senders and previews of everything synced. **Search all of Gmail** runs your query (Gmail syntax) against the mailbox and lets you **Import** an older thread; it is limited to 30 requests per minute per user, shared by searches and imports. Message bodies are not searched locally.
+
+No new Google scope is needed: `gmail.compose` already allows sending drafts.

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ThreadViewCounts } from "@replywise/db";
 import Link from "next/link";
 import { type ReactNode, Suspense } from "react";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -12,9 +13,11 @@ const SECONDARY = [SETTINGS_NAV_ITEM];
 export function SidebarContent({
   accountSlot,
   onNavigate,
+  counts,
 }: {
   accountSlot?: ReactNode;
   onNavigate?: () => void;
+  counts?: Promise<ThreadViewCounts | null>;
 }) {
   return (
     <div className="flex h-full flex-col gap-6">
@@ -32,7 +35,12 @@ export function SidebarContent({
         Replywise
       </Link>
       <Suspense fallback={<NavLinksView items={PRIMARY} label="Mailbox views" pathname={null} />}>
-        <NavLinks items={PRIMARY} label="Mailbox views" onNavigate={onNavigate} />
+        <NavLinks
+          items={PRIMARY}
+          label="Mailbox views"
+          onNavigate={onNavigate}
+          {...(counts ? { counts } : {})}
+        />
       </Suspense>
       <div className="mt-auto flex flex-col gap-2">
         <Suspense fallback={<NavLinksView items={SECONDARY} label="Account" pathname={null} />}>

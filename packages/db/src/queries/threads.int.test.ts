@@ -9,7 +9,13 @@ import {
   setupTestDb,
 } from "../testing";
 import { upsertThreadInsight } from "./ai";
-import { getThreadForUser, listInboxThreads } from "./threads";
+import {
+  countThreadViews,
+  getThreadForUser,
+  listInboxThreads,
+  listOtherThreads,
+  listSentThreads,
+} from "./threads";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -109,5 +115,120 @@ describe("getThreadForUser", () => {
     expect(detail?.mailbox).toMatchObject({ id: mailbox.id, provider: "gmail", status: "active" });
     expect(detail?.messages.map((m) => m.providerMessageId)).toEqual(["a", "b"]);
     expect(await getThreadForUser(db, mallory.id, thread.id)).toBeNull();
+  });
+});
+
+describe("Other, Sent and view counts", () => {
+  async function seedViews() {
+    const alice = await insertUser(db);
+    const bob = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    const bobBox = await insertMailAccount(db, bob.id);
+    const day = (d: number) => new Date(`2026-11-${String(d).padStart(2, "0")}T00:00:00Z`);
+    const plain = await insertThread(db, box.id, {
+      subject: "Plain",
+      providerLabels: ["INBOX"],
+      lastMessageAt: day(20),
+    });
+    const plainMessage = await insertMessage(db, plain.id, box.id);
+    const promo = await insertThread(db, box.id, {
+      subject: "Promo",
+      providerLabels: ["CATEGORY_PROMOTIONS", "INBOX"],
+      lastMessageAt: day(21),
+    });
+    const promoMessage = await insertMessage(db, promo.id, box.id);
+    const social = await insertThread(db, box.id, {
+      subject: "Social",
+      providerLabels: ["CATEGORY_SOCIAL", "INBOX"],
+      lastMessageAt: day(22),
+    });
+    await insertMessage(db, social.id, box.id);
+    // The user wrote in it: never Other, even with a tab label.
+    const answered = await insertThread(db, box.id, {
+      subject: "Answered update",
+      providerLabels: ["CATEGORY_UPDATES", "INBOX", "SENT"],
+      lastMessageAt: day(23),
+    });
+    await insertMessage(db, answered.id, box.id);
+    await insertMessage(db, answered.id, box.id, { isFromUser: true });
+    const sentOnly = await insertThread(db, box.id, {
+      subject: "Sent only",
+      providerLabels: ["SENT"],
+      lastMessageAt: day(24),
+    });
+    await insertMessage(db, sentOnly.id, box.id, { isFromUser: true });
+    const bobPromo = await insertThread(db, bobBox.id, {
+      subject: "Bob promo",
+      providerLabels: ["CATEGORY_PROMOTIONS", "INBOX"],
+    });
+    await insertMessage(db, bobPromo.id, bobBox.id);
+    const insight = (
+      threadId: string,
+      messageId: string,
+      category: "informational" | "low_priority",
+    ) =>
+      upsertThreadInsight(db, {
+        threadId,
+        category,
+        urgency: 1,
+        importance: category === "informational" ? 2 : 1,
+        needsReply: false,
+        reasons: ["r"],
+        classifiedThroughMessageId: messageId,
+        aiProvider: "anthropic",
+        model: "claude-opus-5-5",
+        promptVersion: "classify-v1",
+      });
+    await insight(plain.id, plainMessage.id, "informational");
+    await insight(promo.id, promoMessage.id, "low_priority");
+    return { alice, bob };
+  }
+
+  it("hides Other threads from the inbox and the AI tabs", async () => {
+    const { alice } = await seedViews();
+    expect((await listInboxThreads(db, alice.id)).map((t) => t.subject)).toEqual([
+      "Answered update",
+      "Plain",
+    ]);
+    expect(await listInboxThreads(db, alice.id, { category: "low_priority" })).toEqual([]);
+    expect(
+      (await listInboxThreads(db, alice.id, { category: "informational" })).map((t) => t.subject),
+    ).toEqual(["Plain"]);
+  });
+
+  it("lists Other threads newest first, filtered by tab and scoped to the user", async () => {
+    const { alice, bob } = await seedViews();
+    expect((await listOtherThreads(db, alice.id)).map((t) => t.subject)).toEqual([
+      "Social",
+      "Promo",
+    ]);
+    expect(
+      (await listOtherThreads(db, alice.id, { tab: "promotions" })).map((t) => t.subject),
+    ).toEqual(["Promo"]);
+    expect(await listOtherThreads(db, alice.id, { tab: "updates" })).toEqual([]);
+    expect((await listOtherThreads(db, bob.id)).map((t) => t.subject)).toEqual(["Bob promo"]);
+  });
+
+  it("lists SENT threads", async () => {
+    const { alice } = await seedViews();
+    expect((await listSentThreads(db, alice.id)).map((t) => t.subject)).toEqual([
+      "Sent only",
+      "Answered update",
+    ]);
+  });
+
+  it("counts views with the same rule", async () => {
+    const { alice } = await seedViews();
+    expect(await countThreadViews(db, alice.id)).toEqual({
+      inbox: 2,
+      other: 2,
+      categories: {
+        urgent: 0,
+        important: 0,
+        needs_reply: 0,
+        informational: 1,
+        low_priority: 0,
+      },
+    });
   });
 });

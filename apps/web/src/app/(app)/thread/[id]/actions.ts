@@ -11,6 +11,7 @@ import {
   getAiCredentialSummary,
   getDraftForUser,
   getWritingPreferences,
+  hasActiveSend,
   hasFreshPendingDraft,
   latestInboundMessageId,
   requestDraftSave,
@@ -22,18 +23,14 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { getEncryptor } from "@/lib/crypto";
 import { getDb } from "@/lib/db";
+import { normalizeBody } from "@/lib/draft-body";
 import { getQueue } from "@/lib/queue";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_INSTRUCTIONS = 2_000;
-const MAX_BODY = 20_000;
 
 function field(formData: FormData, name: string): string {
   return String(formData.get(name) ?? "");
-}
-
-function normalizeBody(raw: string): string {
-  return raw.replace(/\r\n?/g, "\n").slice(0, MAX_BODY);
 }
 
 async function ownedThread(userId: string, formData: FormData): Promise<string | null> {
@@ -71,6 +68,8 @@ export async function generateDraftAction(formData: FormData): Promise<void> {
   const threadId = await ownedThread(user.id, formData);
   if (!threadId || !(await hasValidKey(user.id))) return;
   if (await hasFreshPendingDraft(getDb(), user.id, threadId, new Date())) return;
+  // A confirmed send of this thread is running: no regenerate until it ends (spec M6 §2.1).
+  if (await hasActiveSend(getDb(), user.id, threadId)) return;
   const prefs = await getWritingPreferences(getDb(), user.id);
   const toneValue = field(formData, "tone");
   const tone: ReplyTone = (REPLY_TONES as readonly string[]).includes(toneValue)

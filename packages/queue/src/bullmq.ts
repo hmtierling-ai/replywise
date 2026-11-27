@@ -75,6 +75,9 @@ export function createJobQueue(connection: Redis, options: { prefix?: string } =
       const schedulers = await queueFor(queue).getJobSchedulers();
       return schedulers.map((s) => s.key).filter((key): key is string => typeof key === "string");
     },
+    async removeJob(queue, jobId) {
+      await queueFor(queue).remove(jobId);
+    },
     async close() {
       await Promise.all([...queues.values()].map((queue) => queue.close()));
     },

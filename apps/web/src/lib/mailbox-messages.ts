@@ -46,7 +46,7 @@ export function flashFromSearchParams(
   if (connected && isMailProviderId(connected)) {
     return {
       tone: "success",
-      message: `${PROVIDER_LABEL[connected]} connected. Replywise can now read your mail and save drafts — it never sends email.`,
+      message: `${PROVIDER_LABEL[connected]} connected. Replywise can now read your mail and save drafts — it never sends email without your confirmation.`,
     };
   }
   const disconnected = first(params.disconnected);

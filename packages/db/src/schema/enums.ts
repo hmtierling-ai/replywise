@@ -22,6 +22,10 @@ export const draftStatusEnum = pgEnum("draft_status", [
   "saved",
   "discarded",
   "failed",
+  "scheduled",
+  "sending",
+  "sent",
+  "send_failed",
 ]);
 export const aiJobStatusEnum = pgEnum("ai_job_status", ["pending", "ready", "failed"]);
 export const aiProviderEnum = pgEnum("ai_provider", AI_PROVIDERS);

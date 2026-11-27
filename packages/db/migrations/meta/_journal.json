@@ -22,6 +22,20 @@
       "when": 1795559445791,
       "tag": "0002_summaries_drafts",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795729850066,
+      "tag": "0003_send_search",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795736181356,
+      "tag": "0004_participants_text_values",
+      "breakpoints": true
     }
   ]
 }

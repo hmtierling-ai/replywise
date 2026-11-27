@@ -67,3 +67,22 @@ describe("parseEnv", () => {
     expect(env.OUTLOOK_CLIENT_ID).toBeUndefined();
   });
 });
+
+describe("E2E_FAKE_GMAIL_URL", () => {
+  const web = {
+    ...base,
+    APP_URL: "http://localhost:3000",
+    BETTER_AUTH_SECRET: "x".repeat(32),
+  };
+  it("accepts a loopback origin", () => {
+    expect(
+      parseEnv(webEnvSchema, { ...web, E2E_FAKE_GMAIL_URL: "http://127.0.0.1:4010" })
+        .E2E_FAKE_GMAIL_URL,
+    ).toBe("http://127.0.0.1:4010");
+  });
+  it("rejects any other host", () => {
+    expect(() =>
+      parseEnv(webEnvSchema, { ...web, E2E_FAKE_GMAIL_URL: "https://gmail.example.com" }),
+    ).toThrow(EnvValidationError);
+  });
+});

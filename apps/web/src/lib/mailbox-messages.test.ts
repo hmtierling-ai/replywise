@@ -11,7 +11,7 @@ describe("flashFromSearchParams", () => {
     expect(flashFromSearchParams({ connected: "gmail" })).toEqual({
       tone: "success",
       message:
-        "Gmail connected. Replywise can now read your mail and save drafts — it never sends email.",
+        "Gmail connected. Replywise can now read your mail and save drafts — it never sends email without your confirmation.",
     });
     expect(flashFromSearchParams({ disconnected: "gmail" })?.tone).toBe("success");
   });

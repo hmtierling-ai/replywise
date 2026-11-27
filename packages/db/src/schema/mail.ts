@@ -72,12 +72,24 @@ export const threads = pgTable(
     messageCount: integer("message_count").notNull().default(0),
     isUnread: boolean("is_unread").notNull().default(false),
     providerLabels: text("provider_labels").array().notNull().default(sql`'{}'::text[]`),
+    /**
+     * Lower-cased participant names and addresses, space-separated, for trigram search (spec M6
+     * §5.1). Values only: no JSON keys, quotes or nulls. The IMMUTABLE SQL function
+     * `participants_search_text` is created by migration 0004.
+     */
+    participantsText: text("participants_text").generatedAlwaysAs(
+      sql`participants_search_text(participants)`,
+    ),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     uniqueIndex("threads_account_provider_thread_uq").on(t.mailAccountId, t.providerThreadId),
     index("threads_account_last_message_idx").on(t.mailAccountId, t.lastMessageAt.desc()),
+    index("threads_provider_labels_gin_idx").using("gin", t.providerLabels),
+    index("threads_subject_trgm_idx").using("gin", t.subject.op("gin_trgm_ops")),
+    index("threads_snippet_trgm_idx").using("gin", t.snippet.op("gin_trgm_ops")),
+    index("threads_participants_trgm_idx").using("gin", t.participantsText.op("gin_trgm_ops")),
   ],
 );
 

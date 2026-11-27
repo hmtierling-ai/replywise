@@ -42,6 +42,7 @@ export function createFakeGmail(seed: FakeGmailSeed = {}) {
     listThreadIds: [] as Array<{ query: string; maxResults: number; pageToken?: string }>,
     listHistory: [] as Array<{ startHistoryId: string; pageToken?: string }>,
     getThread: [] as string[],
+    getThreadMetadata: [] as string[],
   };
   const fail = () => {
     if (seed.failWith) throw seed.failWith;
@@ -60,6 +61,23 @@ export function createFakeGmail(seed: FakeGmailSeed = {}) {
       const size = Math.min(input.maxResults, seed.pageSize ?? input.maxResults);
       const end = start + size;
       return { ids: ids.slice(start, end), nextPageToken: end < ids.length ? String(end) : null };
+    },
+    async getThreadMetadata(threadId) {
+      fail();
+      calls.getThreadMetadata.push(threadId);
+      const sorted = [...(threads[threadId] ?? [])].sort(
+        (a, b) => a.sentAt.getTime() - b.sentAt.getTime(),
+      );
+      const first = sorted[0];
+      const last = sorted.at(-1);
+      if (!first || !last) return null;
+      return {
+        providerThreadId: threadId,
+        subject: first.subject,
+        from: last.from,
+        date: last.sentAt,
+        snippet: last.snippet,
+      };
     },
     async getThread(threadId) {
       fail();

@@ -1,18 +1,79 @@
 import { CATEGORY_META, type InboxCategory } from "@replywise/core";
-import { listInboxThreads, listMailAccounts } from "@replywise/db";
+import {
+  type InboxThread,
+  listInboxThreads,
+  listMailAccounts,
+  listOtherThreads,
+  listSentThreads,
+  type OtherTab,
+  type SearchThread,
+  type ThreadLocation,
+} from "@replywise/db";
 import Link from "next/link";
 import { connection } from "next/server";
 import { CategoryBadge } from "@/components/inbox/category-badge";
 import { EmptyInbox } from "@/components/inbox/empty-inbox";
+import { OTHER_TAB_TEXT } from "@/components/inbox/other-tabs";
 import { LocalTime } from "@/components/local-time";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { emptyInboxState, formatParticipants, formatThreadTime } from "@/lib/inbox-format";
 import { cn } from "@/lib/utils";
 
+export type ThreadListView =
+  | { kind: "inbox"; category?: InboxCategory }
+  | { kind: "sent" }
+  | { kind: "other"; tab: OtherTab | null };
+
+const LOCATION_TEXT: Record<ThreadLocation, string> = {
+  inbox: "Inbox",
+  other: "Other",
+  sent: "Sent",
+  archived: "Archived",
+};
+
+function loadThreads(
+  db: ReturnType<typeof getDb>,
+  userId: string,
+  view: ThreadListView,
+): Promise<InboxThread[]> {
+  if (view.kind === "sent") return listSentThreads(db, userId);
+  if (view.kind === "other") return listOtherThreads(db, userId, { tab: view.tab });
+  return listInboxThreads(db, userId, view.category ? { category: view.category } : {});
+}
+
+/** Empty copy for views that are not the main inbox (which has its own sync-aware states). */
+function emptyView(view: ThreadListView): { title: string; description: string } | null {
+  if (view.kind === "sent") {
+    return {
+      title: "No sent mail yet",
+      description: "Conversations you wrote in during the last 30 days show up here.",
+    };
+  }
+  if (view.kind === "other") {
+    return view.tab
+      ? {
+          title: `Nothing in ${OTHER_TAB_TEXT[view.tab]}`,
+          description: "Gmail files this kind of mail under its own tab.",
+        }
+      : {
+          title: "Nothing in Other",
+          description: "Promotions, social and update mail you never replied to shows up here.",
+        };
+  }
+  if (view.category) {
+    return {
+      title: `Nothing in ${CATEGORY_META[view.category].label}`,
+      description: CATEGORY_META[view.category].description,
+    };
+  }
+  return null;
+}
+
 /** Reads the session and DB; render inside <Suspense>. */
-export async function ThreadList({ category }: { category?: InboxCategory } = {}) {
+export async function ThreadList({ view }: { view: ThreadListView }) {
   const user = await requireUser();
   await connection();
   const db = getDb();
@@ -31,15 +92,9 @@ export async function ThreadList({ category }: { category?: InboxCategory } = {}
     );
   }
 
-  const threads = await listInboxThreads(db, user.id, category ? { category } : {});
-  if (threads.length === 0 && category) {
-    return (
-      <EmptyInbox
-        title={`Nothing in ${CATEGORY_META[category].label}`}
-        description={CATEGORY_META[category].description}
-      />
-    );
-  }
+  const threads = await loadThreads(db, user.id, view);
+  const empty = threads.length === 0 ? emptyView(view) : null;
+  if (empty) return <EmptyInbox title={empty.title} description={empty.description} />;
   if (threads.length === 0) {
     const state = emptyInboxState(mailboxes);
     if (state === "syncing") {
@@ -73,6 +128,18 @@ export async function ThreadList({ category }: { category?: InboxCategory } = {}
 
   const now = new Date();
   const ownEmails = mailboxes.map((m) => m.emailAddress);
+  return <ThreadRows threads={threads} ownEmails={ownEmails} now={now} />;
+}
+
+export function ThreadRows({
+  threads,
+  ownEmails,
+  now,
+}: {
+  threads: Array<InboxThread | SearchThread>;
+  ownEmails: string[];
+  now: Date;
+}) {
   return (
     <ul className="divide-y divide-border">
       {threads.map((thread) => (
@@ -99,6 +166,9 @@ export async function ThreadList({ category }: { category?: InboxCategory } = {}
                 {formatParticipants(thread.participants, ownEmails)}
               </span>
               {thread.category ? <CategoryBadge category={thread.category} /> : null}
+              {"location" in thread ? (
+                <Badge variant="outline">{LOCATION_TEXT[thread.location]}</Badge>
+              ) : null}
               <LocalTime
                 iso={thread.lastMessageAt.toISOString()}
                 serverText={formatThreadTime(thread.lastMessageAt, now)}

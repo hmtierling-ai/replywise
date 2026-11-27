@@ -14,7 +14,7 @@ export default function MailboxesPage({ searchParams }: PageProps<"/settings/mai
       <h1 className="mt-3 text-xl font-semibold tracking-tight">Mailboxes</h1>
       <p className="mt-1 text-sm text-muted-foreground">
         Connect Gmail or Outlook. Replywise reads your mail and saves reply drafts to your mailbox —
-        it never sends email.
+        it never sends email without your confirmation.
       </p>
       <Suspense fallback={null}>
         <MailboxFlash searchParams={searchParams} />

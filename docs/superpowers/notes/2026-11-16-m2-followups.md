@@ -83,10 +83,30 @@ The final whole-branch review verdict was "ready to merge with fixes"; the fixes
 - Pending drafts hold a placeholder ciphertext encrypted under `aad.replyDraft("pending")` (the draft id isn't known before insert); it is never decrypted.
 - Auto-draft only writes in the app; saving to Gmail is always a user click.
 - The M4 race (classification resurrecting needs_reply after the user's reply) is closed by an upsert guard.
-- No per-user rate limit on Summarize/Generate clicks yet (M6).
+- No per-user rate limit on Summarize/Generate clicks yet (M7).
 - Gmail draft creation (POST) is retried only on Gmail rate limits; any other failure (timeout, 5xx, 4xx) fails the save so a retry can never create a duplicate draft — the user clicks Save again. Updates (PUT) are retried normally.
 - A save request older than 10 minutes (`SAVE_STALE_MS`) and a pending summary or draft older than 5 minutes (`PENDING_STALE_MS`) are treated as abandoned: they no longer block new requests and render as retryable.
 - One in-flight summary and one in-flight generated draft per thread; repeated clicks while one is fresh are ignored (no duplicate paid calls).
 - Reply recipients are validated strictly (ASCII local@domain); internationalised addresses are refused with 'There is no message from someone else to reply to.' rather than risk header injection.
 - The reply MIME module is `packages/mail/src/mime/replyMime.ts` (not `reply.ts`) because the no-send guard rejects `/reply` paths.
-- Deferred: a Redis outage at web cold start can still hang an enqueue until the 5-minute stale window; per-user rate limits on Summarize/Generate remain M6.
+- Deferred: a Redis outage at web cold start can still hang an enqueue until the 5-minute stale window; per-user rate limits on Summarize/Generate moved to M7, where hardening now lives.
+
+## M6 decisions to revisit
+
+- Sending uses Gmail drafts/send after a 10 s undo window; only a rate limit (before the call or as Gmail's answer) is retried. Any other failure of the send call is `send_unconfirmed` (5xx, timeout, network, malformed success) or `send_rejected` (4xx) and is never retried.
+- A `send_attempted` marker in `reply_drafts.error` is set just before the send call and cleared only on a rate-limit answer, so a crashed or duplicate job never calls Gmail twice; such rows become `send_unconfirmed` after 10 minutes.
+- Scheduled sends that never ran within 10 minutes of `send_at` (job lost and not recovered) fail as `internal` (nothing was sent; "Try again" is offered). Overdue ones (> 60 s) are re-enqueued first with the same job id.
+- "Try again" is offered for every send_failed code that proves nothing was sent (send_rejected and the M5 save codes), not only send_rejected.
+- The send dialog refuses to confirm while the editor has unsaved edits ("Save edits" first), so the confirmed body is always the stored one; the action re-checks it (`draft_changed`).
+- Sends run on their own `send` queue (concurrency 2) so AI jobs never delay a confirmed send.
+- The stuck-send scan is its own minutely job (`maintenance.recoverSends`), not part of an existing one.
+- The no-send guard's `/send` pattern no longer matches module paths like `./jobs/send-draft` (needed for the spec's file name); every `…/send` endpoint is still blocked.
+- "Other" = INBOX + a Promotions/Social/Updates label + no message from the user. The Other view shows INBOX threads only; archived tab mail is found by search. Classification is skipped only in the minutely scan (sync never enqueued classification since M4).
+- Nav counts are total threads per view: an `aria-hidden` badge plus sr-only text (", 12 threads") in the link name; they refresh on full loads and Server Actions, not on every client navigation.
+- Local search uses ILIKE + pg_trgm on subject, snippet and a generated `participants_text`; no body search, limit 50, newest first. Since migration 0004, `participants_text` holds only participant names and addresses (IMMUTABLE SQL function `participants_search_text`), so JSON keys, `null` and punctuation never match.
+- The confirmed body is the sent body: `scheduleSend` only applies while `body_ciphertext` still equals the bytes the action decrypted and compared (encryption is randomised, so any re-save changes them); otherwise the action answers `draft_changed`.
+- If the enqueue fails and the undo fails too, the action answers `send_still_scheduled` ("may still be sent — reload to undo"), since recovery may still send the scheduled row. The Redis limiter fails closed: a failed INCR throws and maps to `gmail_error`.
+- Migration ordering (Postgres 55P04): Drizzle applies all pending migrations in one transaction. On a fresh database, a later migration that uses the `draft_status` values added by 0003 (`scheduled`, `sending`, `sent`, `send_failed`) in a default, in data or in a partial-index predicate would fail together with 0003. Future migrations must not use those values that way, or must be applied in a separate migrate run.
+- Gmail search: one in-flight search per user plus 30 Gmail requests per minute (searches and imports share the window), Redis fixed-minute counters. A recent inbox thread imported by hand is classified like any synced thread; old imports never are.
+- `E2E_FAKE_GMAIL_URL` (loopback only) points the web app's Gmail client at the e2e fake.
+- Deferred: Outlook sending/search/import, reply-all, attachments, a setting for which Gmail tabs are hidden.

@@ -4,6 +4,7 @@ import {
   type Db,
   getThreadInsight,
   listInboxThreads,
+  listSentThreads,
   listThreadsPendingClassification,
   mailAccounts,
   messages,
@@ -107,7 +108,7 @@ describe("syncMailbox — backfill", () => {
     const outcome = await syncMailbox(syncDeps(base, gmail), mailAccountId);
 
     expect(outcome).toEqual({ status: "synced", mode: "backfill", threads: 1 });
-    expect(gmail.calls.listThreadIds[0]?.query).toBe("in:inbox newer_than:30d");
+    expect(gmail.calls.listThreadIds[0]?.query).toBe("(in:inbox OR in:sent) newer_than:30d");
     const [thread] = await db.select().from(threads);
     expect(thread).toMatchObject({ providerThreadId: "t1", messageCount: 2, isUnread: true });
     const rows = await db.select().from(messages).orderBy(messages.sentAt);
@@ -573,5 +574,39 @@ describe("syncMailbox — guards and failures", () => {
     const [a, b] = await db.select().from(messages).orderBy(messages.providerMessageId);
     if (!a?.bodyCiphertext || !b) throw new Error("missing rows");
     await expect(encryptor.decrypt(a.bodyCiphertext, aad.messageBody(b.id))).rejects.toThrow();
+  });
+});
+
+describe("sent mail", () => {
+  it("stores sent-only threads, lists them in Sent and never queues them for classification", async () => {
+    const { base, userId, mailAccountId, encryptor } = await connectedGmail();
+    await saveAiCredential(db, {
+      userId,
+      keyCiphertext: await encryptor.encrypt("sk-ant-x", aad.aiCredential(userId, "anthropic")),
+      keyHint: "x",
+      status: "valid",
+      lastValidatedAt: T0,
+    });
+    const gmail = createFakeGmail({
+      threads: {
+        s1: [
+          fakeMessage({
+            providerMessageId: "s1m1",
+            providerThreadId: "s1",
+            from: { name: "Me", address: "me@gmail.com" },
+            to: [{ name: null, address: "client@example.com" }],
+            subject: "Proposal",
+            labelIds: ["SENT"],
+            sentAt: new Date("2026-11-16T00:00:00Z"),
+          }),
+        ],
+      },
+    });
+    await syncMailbox(syncDeps(base, gmail), mailAccountId);
+    expect((await listSentThreads(db, userId)).map((t) => t.subject)).toEqual(["Proposal"]);
+    expect(await listInboxThreads(db, userId)).toEqual([]);
+    expect(await listThreadsPendingClassification(db, new Date("2026-11-01T00:00:00Z"))).toEqual(
+      [],
+    );
   });
 });

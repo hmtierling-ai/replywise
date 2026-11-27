@@ -198,6 +198,33 @@ describe("listThreadsPendingClassification branches", () => {
     expect(await listThreadsPendingClassification(db, since)).toEqual([]);
   });
 
+  it("never returns Other threads, but does return a tab thread the user wrote in", async () => {
+    const alice = await insertUser(db);
+    const box = await insertMailAccount(db, alice.id);
+    await validKey(alice.id);
+    const promo = await insertThread(db, box.id, {
+      lastMessageAt: new Date(now.getTime() - DAY),
+      providerLabels: ["CATEGORY_PROMOTIONS", "INBOX"],
+    });
+    await insertMessage(db, promo.id, box.id, { sentAt: new Date(now.getTime() - DAY) });
+    expect(await listThreadsPendingClassification(db, since)).toEqual([]);
+
+    const replied = await insertThread(db, box.id, {
+      lastMessageAt: new Date(now.getTime() - DAY),
+      providerLabels: ["CATEGORY_UPDATES", "INBOX"],
+    });
+    await insertMessage(db, replied.id, box.id, {
+      sentAt: new Date(now.getTime() - 3 * DAY),
+      isFromUser: true,
+    });
+    const latest = await insertMessage(db, replied.id, box.id, {
+      sentAt: new Date(now.getTime() - DAY),
+    });
+    expect(await listThreadsPendingClassification(db, since)).toEqual([
+      { threadId: replied.id, latestMessageId: latest.id, credentialVersion: expect.any(Number) },
+    ]);
+  });
+
   it("changes credentialVersion when the key is re-saved", async () => {
     const alice = await insertUser(db);
     const box = await insertMailAccount(db, alice.id);

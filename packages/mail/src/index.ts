@@ -1,6 +1,7 @@
 export * from "./gmail";
 export * from "./gmail-api";
 export * from "./gmail-drafts";
+export type { GmailSendApi, GmailSendFactory } from "./gmail-send";
 export { OAuthError, PROVIDER_TIMEOUT_MS, ProviderHttpError } from "./http";
 export * from "./mime/addresses";
 export * from "./mime/encoded-words";

@@ -13,3 +13,34 @@ export const GENERATION_ERRORS: Record<string, string> = {
 export function generationError(code: string | null): string | null {
   return code ? (GENERATION_ERRORS[code] ?? GENERATION_ERRORS.internal ?? null) : null;
 }
+
+/** Copy for send_failed codes written by the worker (spec M6 §2.4). */
+export function sendFailure(code: string | null): string {
+  if (code === "send_unconfirmed") {
+    return "The send may or may not have gone out — check your Gmail Sent folder.";
+  }
+  if (code === "send_rejected") return "Gmail refused to send this reply. Nothing was sent.";
+  return `${generationError(code ?? "internal") ?? GENERATION_ERRORS.internal} Nothing was sent.`;
+}
+
+export type SendActionErrorCode =
+  | "not_sendable"
+  | "draft_changed"
+  | "send_rate_limited"
+  | "too_late"
+  | "send_still_scheduled"
+  | "internal";
+
+export const SEND_ACTION_ERRORS: Record<SendActionErrorCode, string> = {
+  not_sendable: "This reply can't be sent right now. Reload the page and try again.",
+  draft_changed: "The draft changed after you opened this dialog. Review it and confirm again.",
+  send_rate_limited: "You've sent 20 replies in the last hour. Try again later.",
+  too_late: "Too late to undo: the reply is already being sent.",
+  send_still_scheduled:
+    "Something went wrong and the reply may still be sent. Reload the page to undo it.",
+  internal: "Something went wrong. Nothing was sent. Try again.",
+};
+
+export function sendActionError(code: SendActionErrorCode): string {
+  return SEND_ACTION_ERRORS[code];
+}

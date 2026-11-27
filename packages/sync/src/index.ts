@@ -2,6 +2,7 @@ export * from "./body-codec";
 export * from "./concurrency";
 export * from "./deps";
 export * from "./errors";
+export * from "./gmail-search";
 export * from "./persist";
 export * from "./sync-mailbox";
 export * from "./thread-summary";

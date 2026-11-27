@@ -234,3 +234,22 @@ export async function getBodyCacheDays(db: DbExecutor, userId: string): Promise<
     .where(eq(userPreferences.userId, userId));
   return row?.days ?? DEFAULT_BODY_CACHE_DAYS;
 }
+
+/** Local thread ids for provider thread ids of one mailbox. Caller verified mailbox ownership. */
+export async function findLocalThreadIds(
+  db: DbExecutor,
+  mailAccountId: string,
+  providerThreadIds: string[],
+): Promise<Map<string, string>> {
+  if (providerThreadIds.length === 0) return new Map();
+  const rows = await db
+    .select({ id: threads.id, providerThreadId: threads.providerThreadId })
+    .from(threads)
+    .where(
+      and(
+        eq(threads.mailAccountId, mailAccountId),
+        inArray(threads.providerThreadId, providerThreadIds),
+      ),
+    );
+  return new Map(rows.map((row) => [row.providerThreadId, row.id]));
+}
